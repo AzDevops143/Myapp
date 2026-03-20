@@ -36,6 +36,21 @@ service cloud.firestore {
     //   - startTime: timestamp (required)
     //   - notes: string
     //
+    // Collection: /users/{userId}/habits/{habitId}
+    // Fields:
+    //   - name: string (required)
+    //   - icon: string
+    //   - color: string
+    //   - createdAt: timestamp
+    //   - uid: string (required)
+    //
+    // Collection: /users/{userId}/habitLogs/{logId}
+    // Fields:
+    //   - habitId: string (required)
+    //   - date: string (required, format: YYYY-MM-DD)
+    //   - completed: bool (required)
+    //   - uid: string (required)
+    //
     // ===============================================================
 
     // ===============================================================
@@ -106,6 +121,23 @@ service cloud.firestore {
              (!('notes' in data) || (data.notes is string && data.notes.size() < 5000));
     }
 
+    function isValidHabit(data) {
+      return hasRequiredFields(['name', 'uid']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.uid is string && data.uid.size() > 0 &&
+             (!('icon' in data) || (data.icon is string && data.icon.size() < 50)) &&
+             (!('color' in data) || (data.color is string && data.color.size() < 20)) &&
+             (!('createdAt' in data) || data.createdAt is timestamp);
+    }
+
+    function isValidHabitLog(data) {
+      return hasRequiredFields(['habitId', 'date', 'completed', 'uid']) &&
+             data.habitId is string && data.habitId.size() > 0 &&
+             data.date is string && data.date.matches("^\\d{4}-\\d{2}-\\d{2}$") &&
+             data.completed is bool &&
+             data.uid is string && data.uid.size() > 0;
+    }
+
     // ===============================================================
     // Rules
     // ===============================================================
@@ -133,6 +165,20 @@ service cloud.firestore {
         allow read: if isOwner(userId) || isAdmin();
         allow create: if isOwner(userId) && isValidSession(request.resource.data);
         allow update: if isOwner(userId) && isValidSession(request.resource.data);
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+
+      match /habits/{habitId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId) && isValidHabit(request.resource.data);
+        allow update: if isOwner(userId) && isValidHabit(request.resource.data);
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+
+      match /habitLogs/{logId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId) && isValidHabitLog(request.resource.data);
+        allow update: if isOwner(userId) && isValidHabitLog(request.resource.data);
         allow delete: if isOwner(userId) || isAdmin();
       }
     }

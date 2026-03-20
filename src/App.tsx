@@ -46,7 +46,22 @@ import {
   Calendar,
   AlertCircle,
   Pencil,
-  X
+  X,
+  Flame,
+  Check,
+  ChevronLeft,
+  Activity,
+  Dumbbell,
+  Droplets,
+  Coffee,
+  Moon,
+  Sun,
+  Brain,
+  Heart,
+  Music,
+  Code,
+  PenTool,
+  Award
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -63,6 +78,25 @@ import {
 } from 'recharts';
 import { format, subDays, startOfDay, isWithinInterval } from 'date-fns';
 import { cn } from './lib/utils';
+
+// --- Icons Map ---
+const HABIT_ICONS_MAP: Record<string, React.ReactNode> = {
+  Activity: <Activity />,
+  Dumbbell: <Dumbbell />,
+  Droplets: <Droplets />,
+  Coffee: <Coffee />,
+  Moon: <Moon />,
+  Sun: <Sun />,
+  Brain: <Brain />,
+  Heart: <Heart />,
+  Music: <Music />,
+  Code: <Code />,
+  PenTool: <PenTool />,
+  Target: <Target />,
+  BookOpen: <BookOpen />,
+  Clock: <Clock />,
+  Award: <Award />
+};
 
 // --- Types ---
 interface Subject {
@@ -89,6 +123,23 @@ interface StudySession {
   durationMinutes: number;
   startTime: any;
   notes?: string;
+}
+
+interface Habit {
+  id: string;
+  uid: string;
+  name: string;
+  icon: string;
+  color: string;
+  createdAt: any;
+}
+
+interface HabitLog {
+  id: string;
+  uid: string;
+  habitId: string;
+  date: string; // YYYY-MM-DD
+  completed: boolean;
 }
 
 // --- Components ---
@@ -127,15 +178,38 @@ const ErrorBoundary = ({ children }: { children: React.ReactNode }) => {
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'subjects' | 'timer'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'subjects' | 'timer' | 'habits'>('dashboard');
   
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [topics, setTopics] = useState<Topic[]>([]);
   const [sessions, setSessions] = useState<StudySession[]>([]);
+  const [habits, setHabits] = useState<Habit[]>([]);
+  const [habitLogs, setHabitLogs] = useState<HabitLog[]>([]);
   
   const [selectedSubject, setSelectedSubject] = useState<Subject | null>(null);
   const [isAddingSubject, setIsAddingSubject] = useState(false);
   const [isAddingTopic, setIsAddingTopic] = useState(false);
+
+  const toggleHabit = async (habitId: string, date: string) => {
+    if (!user) return;
+    const existingLog = habitLogs.find(l => l.habitId === habitId && l.date === date);
+    try {
+      if (existingLog) {
+        await updateDoc(doc(db, 'users', user.uid, 'habitLogs', existingLog.id), {
+          completed: !existingLog.completed
+        });
+      } else {
+        await addDoc(collection(db, 'users', user.uid, 'habitLogs'), {
+          habitId,
+          date,
+          completed: true,
+          uid: user.uid
+        });
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}/habitLogs`);
+    }
+  };
 
   // Auth Listener
   useEffect(() => {
@@ -189,10 +263,28 @@ export default function App() {
       (error) => handleFirestoreError(error, OperationType.LIST, `users/${user.uid}/topics`)
     );
 
+    const habitsUnsubscribe = onSnapshot(
+      collection(db, 'users', user.uid, 'habits'),
+      (snapshot) => {
+        setHabits(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Habit)));
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, `users/${user.uid}/habits`)
+    );
+
+    const habitLogsUnsubscribe = onSnapshot(
+      collection(db, 'users', user.uid, 'habitLogs'),
+      (snapshot) => {
+        setHabitLogs(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as HabitLog)));
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, `users/${user.uid}/habitLogs`)
+    );
+
     return () => {
       subjectsUnsubscribe();
       sessionsUnsubscribe();
       topicsUnsubscribe();
+      habitsUnsubscribe();
+      habitLogsUnsubscribe();
     };
   }, [user]);
 
@@ -264,6 +356,12 @@ export default function App() {
               active={activeTab === 'timer'} 
               onClick={() => setActiveTab('timer')} 
             />
+            <SidebarItem 
+              icon={<Activity />} 
+              label="Habit Tracker" 
+              active={activeTab === 'habits'} 
+              onClick={() => setActiveTab('habits')} 
+            />
           </nav>
 
           <div className="p-4 border-t border-slate-100">
@@ -303,6 +401,9 @@ export default function App() {
                     subjects={subjects} 
                     sessions={sessions} 
                     topics={topics}
+                    habits={habits}
+                    habitLogs={habitLogs}
+                    toggleHabit={toggleHabit}
                     user={user} 
                   />
                 </motion.div>
@@ -338,6 +439,21 @@ export default function App() {
                   />
                 </motion.div>
               )}
+              {activeTab === 'habits' && (
+                <motion.div 
+                  key="habits"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                >
+                  <HabitsView 
+                    habits={habits}
+                    habitLogs={habitLogs}
+                    toggleHabit={toggleHabit}
+                    user={user}
+                  />
+                </motion.div>
+              )}
             </AnimatePresence>
           </div>
         </main>
@@ -348,7 +464,15 @@ export default function App() {
 
 // --- Sub-Views ---
 
-function DashboardView({ subjects, sessions, topics, user }: { subjects: Subject[], sessions: StudySession[], topics: Topic[], user: User }) {
+function DashboardView({ subjects, sessions, topics, habits, habitLogs, toggleHabit, user }: { 
+  subjects: Subject[], 
+  sessions: StudySession[], 
+  topics: Topic[], 
+  habits: Habit[], 
+  habitLogs: HabitLog[], 
+  toggleHabit: (id: string, date: string) => void,
+  user: User 
+}) {
   const stats = useMemo(() => {
     const totalMinutes = sessions.reduce((acc, s) => acc + s.durationMinutes, 0);
     const hours = Math.floor(totalMinutes / 60);
@@ -371,8 +495,35 @@ function DashboardView({ subjects, sessions, topics, user }: { subjects: Subject
     const totalTopics = topics.length;
     const overallProgress = totalTopics > 0 ? Math.round((completedTopics / totalTopics) * 100) : 0;
 
-    return { hours, mins, totalMinutes, chartData, completedTopics, totalTopics, overallProgress };
-  }, [sessions, topics]);
+    // Habit stats
+    const today = format(new Date(), 'yyyy-MM-dd');
+    const todayLogs = habitLogs.filter(l => l.date === today && l.completed);
+    const habitCompletionRate = habits.length > 0 ? Math.round((todayLogs.length / habits.length) * 100) : 0;
+    
+    const calculateStreak = (habitId: string) => {
+      let streak = 0;
+      let checkDate = new Date();
+      while (true) {
+        const dateStr = format(checkDate, 'yyyy-MM-dd');
+        const log = habitLogs.find(l => l.habitId === habitId && l.date === dateStr);
+        if (log?.completed) {
+          streak++;
+          checkDate = subDays(checkDate, 1);
+        } else {
+          if (dateStr === format(new Date(), 'yyyy-MM-dd')) {
+            checkDate = subDays(checkDate, 1);
+            continue;
+          }
+          break;
+        }
+      }
+      return streak;
+    };
+
+    const maxStreak = habits.length > 0 ? Math.max(...habits.map(h => calculateStreak(h.id))) : 0;
+
+    return { hours, mins, totalMinutes, chartData, completedTopics, totalTopics, overallProgress, habitCompletionRate, maxStreak };
+  }, [sessions, topics, habits, habitLogs]);
 
   return (
     <div className="space-y-8">
@@ -385,27 +536,28 @@ function DashboardView({ subjects, sessions, topics, user }: { subjects: Subject
           subValue="Keep it up!"
         />
         <StatCard 
-          icon={<BookOpen className="text-emerald-600" />} 
-          label="Subjects Tracked" 
-          value={subjects.length.toString()} 
-          subValue="Active subjects"
-        />
-        <StatCard 
-          icon={<CheckCircle2 className="text-amber-600" />} 
+          icon={<CheckCircle2 className="text-emerald-600" />} 
           label="Topics Completed" 
           value={`${stats.completedTopics}/${stats.totalTopics}`} 
           subValue={`${stats.overallProgress}% overall progress`}
         />
         <StatCard 
-          icon={<TrendingUp className="text-indigo-600" />} 
-          label="Sessions Logged" 
-          value={sessions.length.toString()} 
-          subValue="Last 30 days"
+          icon={<Activity className="text-amber-600" />} 
+          label="Habit Completion" 
+          value={`${stats.habitCompletionRate}%`} 
+          subValue="Today's progress"
+        />
+        <StatCard 
+          icon={<Flame className="text-orange-600" />} 
+          label="Best Streak" 
+          value={`${stats.maxStreak} Days`} 
+          subValue="Consistency is key"
         />
       </div>
 
       {/* Charts Section */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* Weekly Activity */}
         <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
           <h3 className="text-lg font-bold text-slate-900 mb-6 flex items-center gap-2">
             <Calendar className="w-5 h-5 text-indigo-600" />
@@ -427,6 +579,55 @@ function DashboardView({ subjects, sessions, topics, user }: { subjects: Subject
           </div>
         </div>
 
+        {/* Today's Habits */}
+        <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
+          <h3 className="text-lg font-bold text-slate-900 mb-6 flex items-center gap-2">
+            <Activity className="w-5 h-5 text-amber-600" />
+            Today's Habits
+          </h3>
+          <div className="space-y-3">
+            {habits.length === 0 ? (
+              <p className="text-slate-400 text-center py-12">No habits tracked yet.</p>
+            ) : (
+              habits.map(habit => {
+                const today = format(new Date(), 'yyyy-MM-dd');
+                const isCompleted = habitLogs.find(l => l.habitId === habit.id && l.date === today)?.completed;
+                return (
+                  <div 
+                    key={habit.id} 
+                    className={cn(
+                      "flex items-center justify-between p-3 rounded-2xl transition-all border",
+                      isCompleted ? "bg-indigo-50/50 border-indigo-100" : "bg-slate-50 border-slate-100"
+                    )}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div 
+                        className="w-8 h-8 rounded-lg flex items-center justify-center"
+                        style={{ backgroundColor: `${habit.color}15`, color: habit.color }}
+                      >
+                        {React.cloneElement((HABIT_ICONS_MAP[habit.icon] || <Activity />) as React.ReactElement, { className: "w-4 h-4" })}
+                      </div>
+                      <span className={cn("text-sm font-semibold", isCompleted ? "text-slate-400 line-through" : "text-slate-700")}>
+                        {habit.name}
+                      </span>
+                    </div>
+                    <button 
+                      onClick={() => toggleHabit(habit.id, today)}
+                      className={cn(
+                        "w-8 h-8 rounded-lg flex items-center justify-center transition-all",
+                        isCompleted ? "bg-indigo-600 text-white" : "bg-white border border-slate-200 text-slate-400"
+                      )}
+                    >
+                      {isCompleted ? <Check className="w-5 h-5" /> : <Plus className="w-5 h-5" />}
+                    </button>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* Subject Breakdown */}
         <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
           <h3 className="text-lg font-bold text-slate-900 mb-6 flex items-center gap-2">
             <TrendingUp className="w-5 h-5 text-emerald-600" />
@@ -1155,6 +1356,326 @@ function TimerView({ subjects, topics, sessions, user }: { subjects: Subject[], 
           <h4 className="font-bold text-lg">Did you know?</h4>
           <p className="text-indigo-100 text-sm">Studying in 25-minute blocks (Pomodoro) with 5-minute breaks can significantly improve retention and focus.</p>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function HabitsView({ habits, habitLogs, toggleHabit, user }: { 
+  habits: Habit[], 
+  habitLogs: HabitLog[], 
+  toggleHabit: (id: string, date: string) => void,
+  user: User 
+}) {
+  const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [isAddingHabit, setIsAddingHabit] = useState(false);
+  const [editingHabit, setEditingHabit] = useState<Habit | null>(null);
+  const [newHabitName, setNewHabitName] = useState('');
+  const [newHabitColor, setNewHabitColor] = useState('#4f46e5');
+  const [newHabitIcon, setNewHabitIcon] = useState('Activity');
+
+  const HABIT_COLORS = ['#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316', '#14b8a6', '#6366f1'];
+  
+  const HABIT_ICONS = Object.keys(HABIT_ICONS_MAP);
+
+  const dates = useMemo(() => {
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = subDays(new Date(), 6 - i);
+      return {
+        full: format(d, 'yyyy-MM-dd'),
+        day: format(d, 'd'),
+        label: format(d, 'EEE')
+      };
+    });
+  }, []);
+
+  const handleAddHabit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newHabitName.trim()) return;
+    try {
+      if (editingHabit) {
+        await updateDoc(doc(db, 'users', user.uid, 'habits', editingHabit.id), {
+          name: newHabitName,
+          color: newHabitColor,
+          icon: newHabitIcon,
+          updatedAt: serverTimestamp()
+        });
+      } else {
+        await addDoc(collection(db, 'users', user.uid, 'habits'), {
+          name: newHabitName,
+          color: newHabitColor,
+          icon: newHabitIcon,
+          uid: user.uid,
+          createdAt: serverTimestamp()
+        });
+      }
+      setNewHabitName('');
+      setIsAddingHabit(false);
+      setEditingHabit(null);
+    } catch (error) {
+      handleFirestoreError(error, editingHabit ? OperationType.UPDATE : OperationType.CREATE, `users/${user.uid}/habits`);
+    }
+  };
+
+  const startEditing = (habit: Habit) => {
+    setEditingHabit(habit);
+    setNewHabitName(habit.name);
+    setNewHabitColor(habit.color);
+    setNewHabitIcon(habit.icon);
+    setIsAddingHabit(true);
+  };
+
+  const toggleHabitAction = async (habitId: string) => {
+    await toggleHabit(habitId, selectedDate);
+  };
+
+  const deleteHabit = async (habitId: string) => {
+    if (!window.confirm('Delete this habit and all its history?')) return;
+    try {
+      await deleteDoc(doc(db, 'users', user.uid, 'habits', habitId));
+      // Optionally delete logs too, but Firestore rules handle access
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `users/${user.uid}/habits/${habitId}`);
+    }
+  };
+
+  const calculateStreak = (habitId: string) => {
+    let streak = 0;
+    let checkDate = new Date();
+    while (true) {
+      const dateStr = format(checkDate, 'yyyy-MM-dd');
+      const log = habitLogs.find(l => l.habitId === habitId && l.date === dateStr);
+      if (log?.completed) {
+        streak++;
+        checkDate = subDays(checkDate, 1);
+      } else {
+        // If it's today and not completed, check yesterday
+        if (dateStr === format(new Date(), 'yyyy-MM-dd')) {
+          checkDate = subDays(checkDate, 1);
+          continue;
+        }
+        break;
+      }
+    }
+    return streak;
+  };
+
+  return (
+    <div className="max-w-4xl mx-auto space-y-8">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-3xl font-bold text-slate-900">Daily Habits</h2>
+          <p className="text-slate-500">Small steps lead to big results.</p>
+        </div>
+        <button 
+          onClick={() => setIsAddingHabit(true)}
+          className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
+        >
+          <Plus className="w-5 h-5" />
+          New Habit
+        </button>
+      </div>
+
+      {/* Date Picker */}
+      <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-hide">
+        {dates.map(d => (
+          <button
+            key={d.full}
+            onClick={() => setSelectedDate(d.full)}
+            className={cn(
+              "flex flex-col items-center min-w-[80px] p-4 rounded-2xl transition-all border",
+              selectedDate === d.full 
+                ? "bg-slate-900 text-white border-slate-900 shadow-xl scale-105" 
+                : "bg-white text-slate-500 border-slate-200 hover:border-slate-300"
+            )}
+          >
+            <span className="text-[10px] font-bold uppercase tracking-widest mb-1">{d.label}</span>
+            <span className="text-xl font-bold">{d.day}</span>
+          </button>
+        ))}
+      </div>
+
+      {isAddingHabit && (
+        <motion.form 
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          onSubmit={handleAddHabit}
+          className="bg-white p-8 rounded-[32px] border border-indigo-100 shadow-xl space-y-6"
+        >
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div className="space-y-6">
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-400 uppercase ml-1">Habit Name</label>
+                <input 
+                  autoFocus
+                  type="text" 
+                  placeholder="e.g. Morning Meditation" 
+                  className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  value={newHabitName}
+                  onChange={(e) => setNewHabitName(e.target.value)}
+                />
+              </div>
+              
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-400 uppercase ml-1">Color</label>
+                <div className="flex flex-wrap gap-3 p-2">
+                  {HABIT_COLORS.map(c => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setNewHabitColor(c)}
+                      className={cn(
+                        "w-9 h-9 rounded-full transition-all hover:scale-110",
+                        newHabitColor === c ? "ring-2 ring-offset-2 ring-indigo-500 scale-110" : "opacity-40"
+                      )}
+                      style={{ backgroundColor: c }}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-slate-400 uppercase ml-1">Icon</label>
+              <div className="grid grid-cols-5 gap-3 p-2 bg-slate-50 rounded-2xl border border-slate-100">
+                {HABIT_ICONS.map(iconName => (
+                  <button
+                    key={iconName}
+                    type="button"
+                    onClick={() => setNewHabitIcon(iconName)}
+                    className={cn(
+                      "w-12 h-12 rounded-xl flex items-center justify-center transition-all",
+                      newHabitIcon === iconName 
+                        ? "bg-indigo-600 text-white shadow-lg shadow-indigo-100 scale-110" 
+                        : "text-slate-400 hover:bg-slate-200"
+                    )}
+                  >
+                    {React.cloneElement(HABIT_ICONS_MAP[iconName] as React.ReactElement, { className: "w-6 h-6" })}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+          
+          <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+            <button 
+              type="button" 
+              onClick={() => {
+                setIsAddingHabit(false);
+                setEditingHabit(null);
+                setNewHabitName('');
+              }} 
+              className="px-6 py-2 text-slate-500 font-bold"
+            >
+              Cancel
+            </button>
+            <button type="submit" className="px-8 py-3 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-100">
+              {editingHabit ? 'Save Changes' : 'Create Habit'}
+            </button>
+          </div>
+        </motion.form>
+      )}
+
+      <div className="grid grid-cols-1 gap-6">
+        {habits.length === 0 ? (
+          <div className="text-center py-20 bg-white rounded-[32px] border border-dashed border-slate-300">
+            <Activity className="w-16 h-16 text-slate-200 mx-auto mb-4" />
+            <p className="text-slate-500">No habits tracked yet. Start building your routine!</p>
+          </div>
+        ) : (
+          habits.map(habit => {
+            const isCompleted = habitLogs.find(l => l.habitId === habit.id && l.date === selectedDate)?.completed;
+            const streak = calculateStreak(habit.id);
+            
+            // Last 30 days history
+            const history = Array.from({ length: 30 }, (_, i) => {
+              const d = subDays(new Date(), 29 - i);
+              const dateStr = format(d, 'yyyy-MM-dd');
+              const log = habitLogs.find(l => l.habitId === habit.id && l.date === dateStr);
+              return { date: dateStr, completed: log?.completed || false };
+            });
+
+            return (
+              <motion.div 
+                layout
+                key={habit.id}
+                className={cn(
+                  "group bg-white p-6 rounded-[32px] border transition-all flex flex-col gap-6",
+                  isCompleted ? "border-indigo-100 bg-indigo-50/10 shadow-sm" : "border-slate-200"
+                )}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <div 
+                      className="w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm"
+                      style={{ backgroundColor: `${habit.color}15`, color: habit.color }}
+                    >
+                      {React.cloneElement((HABIT_ICONS_MAP[habit.icon] || <Activity />) as React.ReactElement, { className: "w-7 h-7" })}
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-slate-900 text-lg">{habit.name}</h4>
+                      <div className="flex items-center gap-3 mt-1">
+                        <div className="flex items-center gap-1 text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
+                          <Flame className="w-3.5 h-3.5 fill-current" />
+                          <span className="text-[10px] font-bold uppercase tracking-wider">{streak} day streak</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <button 
+                      onClick={() => startEditing(habit)}
+                      className="p-2 text-slate-300 hover:text-indigo-600 transition-all opacity-0 group-hover:opacity-100"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button 
+                      onClick={() => deleteHabit(habit.id)}
+                      className="p-2 text-slate-300 hover:text-red-500 transition-all opacity-0 group-hover:opacity-100"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                    <button 
+                      onClick={() => toggleHabit(habit.id, format(selectedDate, 'yyyy-MM-dd'))}
+                      className={cn(
+                        "w-14 h-14 rounded-2xl flex items-center justify-center transition-all shadow-lg",
+                        isCompleted 
+                          ? "bg-indigo-600 text-white shadow-indigo-200" 
+                          : "bg-slate-100 text-slate-400 hover:bg-slate-200"
+                      )}
+                    >
+                      {isCompleted ? <Check className="w-8 h-8 stroke-[3]" /> : <Plus className="w-8 h-8" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* History Grid */}
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center px-1">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Last 30 Days</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                      {history.filter(h => h.completed).length}/30 Completed
+                    </span>
+                  </div>
+                  <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-hide">
+                    {history.map((h, i) => (
+                      <div 
+                        key={i}
+                        title={h.date}
+                        className={cn(
+                          "w-3.5 h-3.5 rounded-sm shrink-0 transition-all",
+                          h.completed ? "" : "bg-slate-100"
+                        )}
+                        style={{ backgroundColor: h.completed ? habit.color : undefined }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </motion.div>
+            );
+          })
+        )}
       </div>
     </div>
   );

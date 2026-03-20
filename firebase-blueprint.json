@@ -53,6 +53,33 @@
         "notes": { "type": "string" }
       },
       "required": ["topicId", "durationMinutes", "startTime"]
+    },
+    "Habit": {
+      "title": "Habit",
+      "description": "A daily habit to track",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "icon": { "type": "string" },
+        "color": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "uid"]
+    },
+    "HabitLog": {
+      "title": "Habit Log",
+      "description": "A completion log for a habit on a specific date",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "uid": { "type": "string" },
+        "habitId": { "type": "string" },
+        "date": { "type": "string", "description": "YYYY-MM-DD format" },
+        "completed": { "type": "boolean" }
+      },
+      "required": ["habitId", "date", "completed", "uid"]
     }
   },
   "firestore": {
@@ -71,6 +98,14 @@
     "/users/{userId}/sessions/{sessionId}": {
       "schema": "StudySession",
       "description": "User study logs"
+    },
+    "/users/{userId}/habits/{habitId}": {
+      "schema": "Habit",
+      "description": "User habits"
+    },
+    "/users/{userId}/habitLogs/{logId}": {
+      "schema": "HabitLog",
+      "description": "Habit completion logs"
     }
   }
 }
