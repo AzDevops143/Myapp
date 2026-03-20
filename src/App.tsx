@@ -189,8 +189,11 @@ const ErrorBoundary = ({ children }: { children: React.ReactNode }) => {
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'subjects' | 'timer' | 'habits'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'subjects' | 'timer' | 'habits' | 'calendar'>('dashboard');
   
+  const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(localStorage.getItem('google_access_token'));
+  const [calendarEvents, setCalendarEvents] = useState<any[]>([]);
+  const [isSyncingCalendar, setIsSyncingCalendar] = useState(false);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [topics, setTopics] = useState<Topic[]>([]);
   const [sessions, setSessions] = useState<StudySession[]>([]);
@@ -240,11 +243,59 @@ export default function App() {
             role: 'user'
           });
         }
+      } else {
+        setGoogleAccessToken(null);
+        localStorage.removeItem('google_access_token');
       }
       setLoading(false);
     });
     return () => unsubscribe();
   }, []);
+
+  const handleLogin = async () => {
+    try {
+      const result = await signInWithGoogle();
+      // @ts-ignore - access token is on the credential
+      const credential = result.credential;
+      const token = credential?.accessToken;
+      if (token) {
+        setGoogleAccessToken(token);
+        localStorage.setItem('google_access_token', token);
+      }
+    } catch (error) {
+      console.error("Login failed", error);
+    }
+  };
+
+  const fetchCalendarEvents = async () => {
+    if (!googleAccessToken) return;
+    setIsSyncingCalendar(true);
+    try {
+      const response = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=' + new Date().toISOString(), {
+        headers: {
+          'Authorization': `Bearer ${googleAccessToken}`
+        }
+      });
+      if (response.status === 401) {
+        setGoogleAccessToken(null);
+        localStorage.removeItem('google_access_token');
+        setIsSyncingCalendar(false);
+        return;
+      }
+      const data = await response.json();
+      setCalendarEvents(data.items || []);
+    } catch (error) {
+      console.error("Failed to fetch calendar events", error);
+    } finally {
+      setIsSyncingCalendar(false);
+    }
+  };
+
+  useEffect(() => {
+    if (googleAccessToken && user) {
+      fetchCalendarEvents();
+    }
+  }, [googleAccessToken, user]);
 
   // Data Listeners
   useEffect(() => {
@@ -325,7 +376,7 @@ export default function App() {
           <p className="text-slate-500 mb-8">Master your syllabus with data-driven study tracking.</p>
           
           <button 
-            onClick={signInWithGoogle}
+            onClick={handleLogin}
             className="w-full flex items-center justify-center gap-3 py-4 px-6 bg-white border-2 border-slate-100 rounded-2xl font-semibold text-slate-700 hover:bg-slate-50 hover:border-slate-200 transition-all active:scale-95"
           >
             <img src="https://www.google.com/favicon.ico" className="w-5 h-5" alt="Google" />
@@ -372,6 +423,12 @@ export default function App() {
               label="Habit Tracker" 
               active={activeTab === 'habits'} 
               onClick={() => setActiveTab('habits')} 
+            />
+            <SidebarItem 
+              icon={<Calendar />} 
+              label="Calendar" 
+              active={activeTab === 'calendar'} 
+              onClick={() => setActiveTab('calendar')} 
             />
           </nav>
 
@@ -465,10 +522,27 @@ export default function App() {
                   />
                 </motion.div>
               )}
+              {activeTab === 'calendar' && (
+                <motion.div 
+                  key="calendar"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                >
+                  <CalendarView 
+                    events={calendarEvents}
+                    isSyncing={isSyncingCalendar}
+                    onSync={fetchCalendarEvents}
+                    googleAccessToken={googleAccessToken}
+                    onLogin={handleLogin}
+                  />
+                </motion.div>
+              )}
             </AnimatePresence>
           </div>
         </main>
       </div>
+      <AlarmSystem calendarEvents={calendarEvents} topics={topics} />
     </ErrorBoundary>
   );
 }
@@ -1636,9 +1710,19 @@ function HabitsView({ habits, habitLogs, toggleHabit, user }: {
                             </div>
                             <div>
                               <p className="font-bold text-slate-900 text-sm">{habit.name}</p>
-                              <div className="flex items-center gap-1 text-amber-600">
-                                <Flame className="w-3 h-3 fill-current" />
-                                <span className="text-[10px] font-bold uppercase">{streak} day streak</span>
+                              <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-1 text-amber-600">
+                                  <Flame className="w-3 h-3 fill-current" />
+                                  <span className="text-[10px] font-bold uppercase">{streak} day streak</span>
+                                </div>
+                                <span className="text-[10px] font-bold text-slate-400">•</span>
+                                <span className="text-[10px] font-bold text-indigo-600 uppercase">{progress}% done</span>
+                              </div>
+                              <div className="mt-1.5 w-full h-1 bg-slate-100 rounded-full overflow-hidden">
+                                <div 
+                                  className="h-full transition-all duration-500"
+                                  style={{ width: `${progress}%`, backgroundColor: habit.color }}
+                                />
                               </div>
                             </div>
                           </div>
@@ -1783,6 +1867,200 @@ function StatCard({ icon, label, value, subValue }: { icon: React.ReactNode, lab
         <h4 className="text-2xl font-bold text-slate-900">{value}</h4>
         <p className="text-xs text-slate-400 mt-1">{subValue}</p>
       </div>
+    </div>
+  );
+}
+
+function CalendarView({ events, isSyncing, onSync, googleAccessToken, onLogin }: { 
+  events: any[], 
+  isSyncing: boolean, 
+  onSync: () => void,
+  googleAccessToken: string | null,
+  onLogin: () => void
+}) {
+  if (!googleAccessToken) {
+    return (
+      <div className="flex flex-col items-center justify-center p-12 bg-white rounded-3xl border border-slate-100 shadow-sm text-center">
+        <div className="w-16 h-16 bg-indigo-50 rounded-2xl flex items-center justify-center mb-6">
+          <Calendar className="w-8 h-8 text-indigo-600" />
+        </div>
+        <h3 className="text-xl font-bold text-slate-900 mb-2">Connect Google Calendar</h3>
+        <p className="text-slate-500 mb-8 max-w-sm mx-auto">
+          Synchronize your study schedule and exams directly from your Google Calendar.
+        </p>
+        <button 
+          onClick={onLogin}
+          className="flex items-center gap-3 py-3 px-6 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
+        >
+          Authorize Calendar Access
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-2xl font-bold text-slate-900">Google Calendar</h3>
+          <p className="text-slate-500">Upcoming events and exams</p>
+        </div>
+        <button 
+          onClick={onSync}
+          disabled={isSyncing}
+          className={cn(
+            "flex items-center gap-2 py-2 px-4 rounded-xl font-medium transition-all",
+            isSyncing ? "bg-slate-100 text-slate-400 cursor-not-allowed" : "bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
+          )}
+        >
+          <RotateCcw className={cn("w-4 h-4", isSyncing && "animate-spin")} />
+          {isSyncing ? 'Syncing...' : 'Sync Now'}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {events.length === 0 ? (
+          <div className="col-span-full p-12 text-center bg-white rounded-3xl border border-slate-100">
+            <p className="text-slate-500">No upcoming events found.</p>
+          </div>
+        ) : (
+          events.map((event: any) => {
+            const start = event.start?.dateTime || event.start?.date;
+            const isExam = event.summary?.toLowerCase().includes('exam') || event.summary?.toLowerCase().includes('test');
+            
+            return (
+              <motion.div 
+                key={event.id}
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className={cn(
+                  "p-6 rounded-3xl border bg-white shadow-sm hover:shadow-md transition-all",
+                  isExam ? "border-red-100 bg-red-50/30" : "border-slate-100"
+                )}
+              >
+                <div className="flex items-start justify-between mb-4">
+                  <div className={cn(
+                    "w-10 h-10 rounded-xl flex items-center justify-center",
+                    isExam ? "bg-red-100 text-red-600" : "bg-indigo-50 text-indigo-600"
+                  )}>
+                    {isExam ? <AlertCircle className="w-5 h-5" /> : <Calendar className="w-5 h-5" />}
+                  </div>
+                  {isExam && (
+                    <span className="px-2 py-1 bg-red-100 text-red-600 text-[10px] font-bold uppercase tracking-wider rounded-lg">
+                      Exam Alert
+                    </span>
+                  )}
+                </div>
+                <h4 className="font-bold text-slate-900 mb-1 line-clamp-1">{event.summary}</h4>
+                <p className="text-sm text-slate-500 mb-4">
+                  {start ? format(new Date(start), 'PPP p') : 'No date set'}
+                </p>
+                {event.location && (
+                  <p className="text-xs text-slate-400 flex items-center gap-1">
+                    <Target className="w-3 h-3" />
+                    {event.location}
+                  </p>
+                )}
+              </motion.div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AlarmSystem({ calendarEvents, topics }: { calendarEvents: any[], topics: Topic[] }) {
+  const [activeAlarms, setActiveAlarms] = useState<string[]>([]);
+  const [lastCompletedTopicId, setLastCompletedTopicId] = useState<string | null>(null);
+
+  // Check for upcoming exams
+  useEffect(() => {
+    const checkExams = () => {
+      const now = new Date();
+      calendarEvents.forEach(event => {
+        const startStr = event.start?.dateTime || event.start?.date;
+        if (!startStr) return;
+        const start = new Date(startStr);
+        const isExam = event.summary?.toLowerCase().includes('exam') || event.summary?.toLowerCase().includes('test');
+        
+        // If exam is within next 15 minutes and not already alerted
+        const diffMinutes = (start.getTime() - now.getTime()) / (1000 * 60);
+        if (isExam && diffMinutes > 0 && diffMinutes <= 15 && !activeAlarms.includes(event.id)) {
+          triggerAlarm(`Upcoming Exam: ${event.summary}`, event.id);
+        }
+      });
+    };
+
+    const interval = setInterval(checkExams, 60000); // Check every minute
+    return () => clearInterval(interval);
+  }, [calendarEvents, activeAlarms]);
+
+  // Check for topic completion
+  useEffect(() => {
+    const completedTopic = topics.find(t => t.status === 'completed');
+    if (completedTopic && completedTopic.id !== lastCompletedTopicId) {
+      triggerAlarm(`Topic Completed: ${completedTopic.name}`, `topic-${completedTopic.id}`);
+      setLastCompletedTopicId(completedTopic.id);
+    }
+  }, [topics, lastCompletedTopicId]);
+
+  const triggerAlarm = (message: string, id: string) => {
+    if (activeAlarms.includes(id)) return;
+    setActiveAlarms(prev => [...prev, id]);
+    
+    // Play sound
+    const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
+    audio.play().catch(e => console.log("Audio play failed", e));
+
+    // Show notification if permitted
+    if (Notification.permission === 'granted') {
+      new Notification('ExamCracker Alarm', { body: message });
+    } else if (Notification.permission !== 'denied') {
+      Notification.requestPermission();
+    }
+  };
+
+  const dismissAlarm = (id: string) => {
+    setActiveAlarms(prev => prev.filter(a => a !== id));
+  };
+
+  if (activeAlarms.length === 0) return null;
+
+  return (
+    <div className="fixed bottom-8 right-8 z-50 space-y-4">
+      <AnimatePresence>
+        {activeAlarms.map(id => {
+          const isTopic = id.startsWith('topic-');
+          const event = calendarEvents.find(e => e.id === id);
+          const topic = topics.find(t => `topic-${t.id}` === id);
+          const message = isTopic ? `Topic Completed: ${topic?.name}` : `Upcoming Exam: ${event?.summary}`;
+
+          return (
+            <motion.div
+              key={id}
+              initial={{ opacity: 0, x: 100, scale: 0.9 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, x: 100, scale: 0.9 }}
+              className="bg-white border-2 border-indigo-600 p-6 rounded-3xl shadow-2xl flex items-center gap-4 max-w-sm"
+            >
+              <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center shrink-0 animate-bounce">
+                <AlertCircle className="w-6 h-6 text-white" />
+              </div>
+              <div className="flex-1">
+                <h4 className="font-bold text-slate-900">Alarm Triggered!</h4>
+                <p className="text-sm text-slate-600">{message}</p>
+              </div>
+              <button 
+                onClick={() => dismissAlarm(id)}
+                className="p-2 hover:bg-slate-100 rounded-xl transition-colors"
+              >
+                <X className="w-5 h-5 text-slate-400" />
+              </button>
+            </motion.div>
+          );
+        })}
+      </AnimatePresence>
     </div>
   );
 }
