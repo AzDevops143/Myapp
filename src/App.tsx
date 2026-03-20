@@ -200,6 +200,7 @@ export default function App() {
   const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(localStorage.getItem('google_access_token'));
   const [calendarEvents, setCalendarEvents] = useState<any[]>([]);
   const [isSyncingCalendar, setIsSyncingCalendar] = useState(false);
+  const [calendarSyncError, setCalendarSyncError] = useState<string | null>(null);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [topics, setTopics] = useState<Topic[]>([]);
   const [sessions, setSessions] = useState<StudySession[]>([]);
@@ -280,11 +281,16 @@ export default function App() {
   const fetchCalendarEvents = async () => {
     if (!googleAccessToken) return;
     setIsSyncingCalendar(true);
+    setCalendarSyncError(null);
     try {
-      const startOfToday = new Date();
-      startOfToday.setHours(0, 0, 0, 0);
+      // Fetch events from 3 months ago to 1 year in the future to ensure the calendar is well-populated
+      const rangeStart = subMonths(new Date(), 3);
+      rangeStart.setHours(0, 0, 0, 0);
       
-      const response = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${startOfToday.toISOString()}&orderBy=startTime&singleEvents=true`, {
+      const rangeEnd = addMonths(new Date(), 12);
+      rangeEnd.setHours(23, 59, 59, 999);
+      
+      const response = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${rangeStart.toISOString()}&timeMax=${rangeEnd.toISOString()}&orderBy=startTime&singleEvents=true&maxResults=2500`, {
         headers: {
           'Authorization': `Bearer ${googleAccessToken}`
         }
@@ -301,15 +307,17 @@ export default function App() {
       if (!response.ok) {
         const errorData = await response.json();
         console.error("Calendar API Error:", errorData);
+        setCalendarSyncError(errorData.error?.message || "Failed to fetch calendar events. Please ensure the Google Calendar API is enabled and you have granted the necessary permissions.");
         setIsSyncingCalendar(false);
         return;
       }
 
       const data = await response.json();
-      console.log(`Fetched ${data.items?.length || 0} calendar events.`);
+      console.log(`Fetched ${data.items?.length || 0} calendar events from ${rangeStart.toLocaleDateString()} to ${rangeEnd.toLocaleDateString()}.`);
       setCalendarEvents(data.items || []);
     } catch (error) {
       console.error("Failed to fetch calendar events", error);
+      setCalendarSyncError("A network error occurred while syncing your calendar. Please check your connection and try again.");
     } finally {
       setIsSyncingCalendar(false);
     }
@@ -498,6 +506,9 @@ export default function App() {
                     toggleHabit={toggleHabit}
                     user={user} 
                     calendarEvents={calendarEvents}
+                    isSyncing={isSyncingCalendar}
+                    onSync={fetchCalendarEvents}
+                    syncError={calendarSyncError}
                   />
                 </motion.div>
               )}
@@ -560,6 +571,7 @@ export default function App() {
                     onSync={fetchCalendarEvents}
                     googleAccessToken={googleAccessToken}
                     onLogin={handleLogin}
+                    syncError={calendarSyncError}
                   />
                 </motion.div>
               )}
@@ -574,7 +586,7 @@ export default function App() {
 
 // --- Sub-Views ---
 
-function DashboardView({ subjects, sessions, topics, habits, habitLogs, toggleHabit, user, calendarEvents }: { 
+function DashboardView({ subjects, sessions, topics, habits, habitLogs, toggleHabit, user, calendarEvents, isSyncing, onSync, syncError }: { 
   subjects: Subject[], 
   sessions: StudySession[], 
   topics: Topic[], 
@@ -582,7 +594,10 @@ function DashboardView({ subjects, sessions, topics, habits, habitLogs, toggleHa
   habitLogs: HabitLog[], 
   toggleHabit: (id: string, date: string) => void,
   user: User,
-  calendarEvents: any[]
+  calendarEvents: any[],
+  isSyncing: boolean,
+  onSync: () => void,
+  syncError: string | null
 }) {
   const stats = useMemo(() => {
     const totalMinutes = sessions.reduce((acc, s) => acc + s.durationMinutes, 0);
@@ -676,9 +691,46 @@ function DashboardView({ subjects, sessions, topics, habits, habitLogs, toggleHa
               </div>
               <h2 className="text-xl font-bold text-slate-900">Upcoming Events</h2>
             </div>
+            <button 
+              onClick={onSync}
+              disabled={isSyncing}
+              className={cn(
+                "p-2 rounded-lg transition-all",
+                isSyncing ? "bg-slate-100 text-slate-400" : "bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
+              )}
+              title="Sync Calendar"
+            >
+              <RotateCcw className={cn("w-4 h-4", isSyncing && "animate-spin")} />
+            </button>
           </div>
           
           <div className="space-y-4">
+            {syncError && (
+              <div className="p-4 bg-red-50 border border-red-100 rounded-2xl flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="text-sm font-bold text-red-900">Sync Error</p>
+                  <p className="text-xs text-red-700 mt-1">{syncError}</p>
+                  <div className="mt-2 flex items-center gap-3">
+                    <button 
+                      onClick={onSync}
+                      className="text-xs font-bold text-red-600 hover:text-red-700 underline"
+                    >
+                      Try Again
+                    </button>
+                    <button 
+                      onClick={() => {
+                        localStorage.removeItem('google_access_token');
+                        window.location.reload();
+                      }}
+                      className="text-xs font-bold text-red-600 hover:text-red-700 underline"
+                    >
+                      Re-authorize
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
             {calendarEvents.length > 0 ? (
               calendarEvents.slice(0, 3).map((event: any) => {
                 const start = event.start?.dateTime || event.start?.date;
@@ -1983,12 +2035,13 @@ function StatCard({ icon, label, value, subValue }: { icon: React.ReactNode, lab
   );
 }
 
-function CalendarView({ events, isSyncing, onSync, googleAccessToken, onLogin }: { 
+function CalendarView({ events, isSyncing, onSync, googleAccessToken, onLogin, syncError }: { 
   events: any[], 
   isSyncing: boolean, 
   onSync: () => void,
   googleAccessToken: string | null,
-  onLogin: () => void
+  onLogin: () => void,
+  syncError: string | null
 }) {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
@@ -2036,10 +2089,36 @@ function CalendarView({ events, isSyncing, onSync, googleAccessToken, onLogin }:
 
   return (
     <div className="space-y-6">
+      {syncError && (
+        <div className="p-4 bg-red-50 border border-red-100 rounded-3xl flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="text-sm font-bold text-red-900">Calendar Sync Error</p>
+            <p className="text-xs text-red-700 mt-1">{syncError}</p>
+            <div className="mt-2 flex items-center gap-3">
+              <button 
+                onClick={onSync}
+                className="text-xs font-bold text-red-600 hover:text-red-700 underline"
+              >
+                Try Again
+              </button>
+              <button 
+                onClick={() => {
+                  localStorage.removeItem('google_access_token');
+                  window.location.reload();
+                }}
+                className="text-xs font-bold text-red-600 hover:text-red-700 underline"
+              >
+                Re-authorize
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h3 className="text-2xl font-bold text-slate-900">Google Calendar</h3>
-          <p className="text-slate-500">Manage your entire schedule</p>
+          <p className="text-slate-500 text-sm">Manage your entire schedule (Primary calendar only)</p>
         </div>
         
         <div className="flex items-center gap-3">
