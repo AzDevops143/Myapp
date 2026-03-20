@@ -401,10 +401,10 @@ export default function App() {
           animate={{ opacity: 1, y: 0 }}
           className="max-w-md w-full bg-white p-8 rounded-3xl shadow-xl border border-slate-100 text-center"
         >
-          <div className="w-20 h-20 bg-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg shadow-indigo-200">
-            <Target className="w-10 h-10 text-white" />
+          <div className="w-24 h-24 bg-[#0a192f] rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg shadow-slate-200 overflow-hidden">
+            <img src="/logo.png" className="w-full h-full object-cover" alt="CHARANTEJP" />
           </div>
-          <h1 className="text-3xl font-bold text-slate-900 mb-2">ExamCracker</h1>
+          <h1 className="text-3xl font-bold text-slate-900 mb-2">CHARANTEJP</h1>
           <p className="text-slate-500 mb-8">Master your syllabus with data-driven study tracking.</p>
           
           <button 
@@ -425,10 +425,10 @@ export default function App() {
         {/* Sidebar */}
         <aside className="w-20 lg:w-64 bg-white border-r border-slate-200 flex flex-col">
           <div className="p-6 flex items-center gap-3">
-            <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shrink-0">
-              <Target className="w-6 h-6 text-white" />
+            <div className="w-10 h-10 bg-[#0a192f] rounded-xl flex items-center justify-center shrink-0 overflow-hidden">
+              <img src="/logo.png" className="w-full h-full object-cover" alt="Logo" />
             </div>
-            <span className="hidden lg:block font-bold text-xl text-slate-900">ExamCracker</span>
+            <span className="hidden lg:block font-bold text-xl text-slate-900">CHARANTEJP</span>
           </div>
 
           <nav className="flex-1 px-4 py-6 space-y-2">
