@@ -76,7 +76,18 @@ import {
   Pie, 
   Cell 
 } from 'recharts';
-import { format, subDays, startOfDay, isWithinInterval } from 'date-fns';
+import { 
+  format, 
+  subDays, 
+  startOfDay, 
+  isWithinInterval, 
+  startOfMonth, 
+  endOfMonth, 
+  eachDayOfInterval, 
+  isSameDay, 
+  addMonths,
+  isToday
+} from 'date-fns';
 import { cn } from './lib/utils';
 
 // --- Icons Map ---
@@ -1364,10 +1375,10 @@ function TimerView({ subjects, topics, sessions, user }: { subjects: Subject[], 
 function HabitsView({ habits, habitLogs, toggleHabit, user }: { 
   habits: Habit[], 
   habitLogs: HabitLog[], 
-  toggleHabit: (id: string, date: string) => void,
+  toggleHabit: (habitId: string, date: string) => void,
   user: User 
 }) {
-  const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [selectedMonth, setSelectedMonth] = useState(new Date());
   const [isAddingHabit, setIsAddingHabit] = useState(false);
   const [editingHabit, setEditingHabit] = useState<Habit | null>(null);
   const [newHabitName, setNewHabitName] = useState('');
@@ -1375,30 +1386,24 @@ function HabitsView({ habits, habitLogs, toggleHabit, user }: {
   const [newHabitIcon, setNewHabitIcon] = useState('Activity');
 
   const HABIT_COLORS = ['#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316', '#14b8a6', '#6366f1'];
-  
   const HABIT_ICONS = Object.keys(HABIT_ICONS_MAP);
 
-  const dates = useMemo(() => {
-    return Array.from({ length: 7 }, (_, i) => {
-      const d = subDays(new Date(), 6 - i);
-      return {
-        full: format(d, 'yyyy-MM-dd'),
-        day: format(d, 'd'),
-        label: format(d, 'EEE')
-      };
-    });
-  }, []);
+  const monthDays = useMemo(() => {
+    const start = startOfMonth(selectedMonth);
+    const end = endOfMonth(selectedMonth);
+    return eachDayOfInterval({ start, end });
+  }, [selectedMonth]);
 
   const handleAddHabit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newHabitName.trim()) return;
+    if (!user || !newHabitName.trim()) return;
+
     try {
       if (editingHabit) {
         await updateDoc(doc(db, 'users', user.uid, 'habits', editingHabit.id), {
           name: newHabitName,
           color: newHabitColor,
-          icon: newHabitIcon,
-          updatedAt: serverTimestamp()
+          icon: newHabitIcon
         });
       } else {
         await addDoc(collection(db, 'users', user.uid, 'habits'), {
@@ -1413,7 +1418,7 @@ function HabitsView({ habits, habitLogs, toggleHabit, user }: {
       setIsAddingHabit(false);
       setEditingHabit(null);
     } catch (error) {
-      handleFirestoreError(error, editingHabit ? OperationType.UPDATE : OperationType.CREATE, `users/${user.uid}/habits`);
+      handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}/habits`);
     }
   };
 
@@ -1425,15 +1430,10 @@ function HabitsView({ habits, habitLogs, toggleHabit, user }: {
     setIsAddingHabit(true);
   };
 
-  const toggleHabitAction = async (habitId: string) => {
-    await toggleHabit(habitId, selectedDate);
-  };
-
   const deleteHabit = async (habitId: string) => {
-    if (!window.confirm('Delete this habit and all its history?')) return;
+    if (!user || !window.confirm('Are you sure you want to delete this habit? All history will be lost.')) return;
     try {
       await deleteDoc(doc(db, 'users', user.uid, 'habits', habitId));
-      // Optionally delete logs too, but Firestore rules handle access
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `users/${user.uid}/habits/${habitId}`);
     }
@@ -1444,13 +1444,12 @@ function HabitsView({ habits, habitLogs, toggleHabit, user }: {
     let checkDate = new Date();
     while (true) {
       const dateStr = format(checkDate, 'yyyy-MM-dd');
-      const log = habitLogs.find(l => l.habitId === habitId && l.date === dateStr);
-      if (log?.completed) {
+      const isCompleted = habitLogs.find(l => l.habitId === habitId && l.date === dateStr)?.completed;
+      if (isCompleted) {
         streak++;
         checkDate = subDays(checkDate, 1);
       } else {
-        // If it's today and not completed, check yesterday
-        if (dateStr === format(new Date(), 'yyyy-MM-dd')) {
+        if (isToday(checkDate)) {
           checkDate = subDays(checkDate, 1);
           continue;
         }
@@ -1461,38 +1460,38 @@ function HabitsView({ habits, habitLogs, toggleHabit, user }: {
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8">
-      <div className="flex items-center justify-between">
+    <div className="max-w-full space-y-8">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold text-slate-900">Daily Habits</h2>
-          <p className="text-slate-500">Small steps lead to big results.</p>
+          <h2 className="text-3xl font-bold text-slate-900">Habit Tracker</h2>
+          <p className="text-slate-500">Track your consistency and build better routines.</p>
         </div>
-        <button 
-          onClick={() => setIsAddingHabit(true)}
-          className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
-        >
-          <Plus className="w-5 h-5" />
-          New Habit
-        </button>
-      </div>
-
-      {/* Date Picker */}
-      <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-hide">
-        {dates.map(d => (
-          <button
-            key={d.full}
-            onClick={() => setSelectedDate(d.full)}
-            className={cn(
-              "flex flex-col items-center min-w-[80px] p-4 rounded-2xl transition-all border",
-              selectedDate === d.full 
-                ? "bg-slate-900 text-white border-slate-900 shadow-xl scale-105" 
-                : "bg-white text-slate-500 border-slate-200 hover:border-slate-300"
-            )}
+        <div className="flex items-center gap-3">
+          <div className="flex items-center bg-white border border-slate-200 rounded-2xl p-1 shadow-sm">
+            <button 
+              onClick={() => setSelectedMonth(addMonths(selectedMonth, -1))}
+              className="p-2 text-slate-500 hover:bg-slate-50 rounded-xl transition-all"
+            >
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+            <span className="px-4 font-bold text-slate-900 min-w-[140px] text-center">
+              {format(selectedMonth, 'MMMM yyyy')}
+            </span>
+            <button 
+              onClick={() => setSelectedMonth(addMonths(selectedMonth, 1))}
+              className="p-2 text-slate-500 hover:bg-slate-50 rounded-xl transition-all"
+            >
+              <ChevronRight className="w-5 h-5" />
+            </button>
+          </div>
+          <button 
+            onClick={() => setIsAddingHabit(true)}
+            className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
           >
-            <span className="text-[10px] font-bold uppercase tracking-widest mb-1">{d.label}</span>
-            <span className="text-xl font-bold">{d.day}</span>
+            <Plus className="w-5 h-5" />
+            New Habit
           </button>
-        ))}
+        </div>
       </div>
 
       {isAddingHabit && (
@@ -1500,7 +1499,7 @@ function HabitsView({ habits, habitLogs, toggleHabit, user }: {
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
           onSubmit={handleAddHabit}
-          className="bg-white p-8 rounded-[32px] border border-indigo-100 shadow-xl space-y-6"
+          className="bg-white p-8 rounded-[32px] border border-indigo-100 shadow-xl space-y-6 max-w-4xl mx-auto"
         >
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
             <div className="space-y-6">
@@ -1576,106 +1575,179 @@ function HabitsView({ habits, habitLogs, toggleHabit, user }: {
         </motion.form>
       )}
 
-      <div className="grid grid-cols-1 gap-6">
-        {habits.length === 0 ? (
-          <div className="text-center py-20 bg-white rounded-[32px] border border-dashed border-slate-300">
-            <Activity className="w-16 h-16 text-slate-200 mx-auto mb-4" />
-            <p className="text-slate-500">No habits tracked yet. Start building your routine!</p>
-          </div>
-        ) : (
-          habits.map(habit => {
-            const isCompleted = habitLogs.find(l => l.habitId === habit.id && l.date === selectedDate)?.completed;
-            const streak = calculateStreak(habit.id);
-            
-            // Last 30 days history
-            const history = Array.from({ length: 30 }, (_, i) => {
-              const d = subDays(new Date(), 29 - i);
-              const dateStr = format(d, 'yyyy-MM-dd');
-              const log = habitLogs.find(l => l.habitId === habit.id && l.date === dateStr);
-              return { date: dateStr, completed: log?.completed || false };
-            });
-
-            return (
-              <motion.div 
-                layout
-                key={habit.id}
-                className={cn(
-                  "group bg-white p-6 rounded-[32px] border transition-all flex flex-col gap-6",
-                  isCompleted ? "border-indigo-100 bg-indigo-50/10 shadow-sm" : "border-slate-200"
-                )}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <div 
-                      className="w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm"
-                      style={{ backgroundColor: `${habit.color}15`, color: habit.color }}
-                    >
-                      {React.cloneElement((HABIT_ICONS_MAP[habit.icon] || <Activity />) as React.ReactElement, { className: "w-7 h-7" })}
+      {/* Monthly Grid */}
+      <div className="bg-white rounded-[32px] border border-slate-200 shadow-sm overflow-hidden">
+        <div className="overflow-x-auto scrollbar-hide">
+          <table className="w-full border-collapse">
+            <thead>
+              <tr className="bg-slate-50/50">
+                <th className="sticky left-0 z-20 bg-slate-50/50 p-6 text-left border-b border-r border-slate-100 min-w-[240px]">
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Habits</span>
+                </th>
+                {monthDays.map(day => (
+                  <th 
+                    key={day.toString()} 
+                    className={cn(
+                      "p-3 border-b border-slate-100 min-w-[44px] text-center",
+                      isToday(day) ? "bg-indigo-50/50" : ""
+                    )}
+                  >
+                    <div className="flex flex-col items-center">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase mb-1">{format(day, 'EEE')}</span>
+                      <span className={cn(
+                        "text-sm font-bold",
+                        isToday(day) ? "text-indigo-600" : "text-slate-700"
+                      )}>{format(day, 'd')}</span>
                     </div>
-                    <div>
-                      <h4 className="font-bold text-slate-900 text-lg">{habit.name}</h4>
-                      <div className="flex items-center gap-3 mt-1">
-                        <div className="flex items-center gap-1 text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
-                          <Flame className="w-3.5 h-3.5 fill-current" />
-                          <span className="text-[10px] font-bold uppercase tracking-wider">{streak} day streak</span>
+                  </th>
+                ))}
+                <th className="p-6 text-center border-b border-slate-100 min-w-[100px]">
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Progress</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {habits.length === 0 ? (
+                <tr>
+                  <td colSpan={monthDays.length + 2} className="p-20 text-center">
+                    <Activity className="w-16 h-16 text-slate-200 mx-auto mb-4" />
+                    <p className="text-slate-500">No habits tracked yet. Start building your routine!</p>
+                  </td>
+                </tr>
+              ) : (
+                habits.map(habit => {
+                  const completedDays = monthDays.filter(day => {
+                    const dateStr = format(day, 'yyyy-MM-dd');
+                    return habitLogs.find(l => l.habitId === habit.id && l.date === dateStr)?.completed;
+                  }).length;
+                  const progress = Math.round((completedDays / monthDays.length) * 100);
+                  const streak = calculateStreak(habit.id);
+
+                  return (
+                    <tr key={habit.id} className="group hover:bg-slate-50/50 transition-all">
+                      <td className="sticky left-0 z-20 bg-white group-hover:bg-slate-50/50 p-4 border-b border-r border-slate-100">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <div 
+                              className="w-10 h-10 rounded-xl flex items-center justify-center shadow-sm"
+                              style={{ backgroundColor: `${habit.color}15`, color: habit.color }}
+                            >
+                              {React.cloneElement((HABIT_ICONS_MAP[habit.icon] || <Activity />) as React.ReactElement, { className: "w-5 h-5" })}
+                            </div>
+                            <div>
+                              <p className="font-bold text-slate-900 text-sm">{habit.name}</p>
+                              <div className="flex items-center gap-1 text-amber-600">
+                                <Flame className="w-3 h-3 fill-current" />
+                                <span className="text-[10px] font-bold uppercase">{streak} day streak</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                            <button 
+                              onClick={() => startEditing(habit)}
+                              className="p-1.5 text-slate-300 hover:text-indigo-600"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button 
+                              onClick={() => deleteHabit(habit.id)}
+                              className="p-1.5 text-slate-300 hover:text-red-500"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    </div>
-                  </div>
+                      </td>
+                      {monthDays.map(day => {
+                        const dateStr = format(day, 'yyyy-MM-dd');
+                        const isCompleted = habitLogs.find(l => l.habitId === habit.id && l.date === dateStr)?.completed;
+                        return (
+                          <td 
+                            key={day.toString()} 
+                            className={cn(
+                              "p-1 border-b border-slate-100 text-center",
+                              isToday(day) ? "bg-indigo-50/30" : ""
+                            )}
+                          >
+                            <button
+                              onClick={() => toggleHabit(habit.id, dateStr)}
+                              className={cn(
+                                "w-8 h-8 rounded-lg transition-all flex items-center justify-center mx-auto",
+                                isCompleted 
+                                  ? "shadow-sm scale-105" 
+                                  : "hover:bg-slate-100 border border-transparent"
+                              )}
+                              style={{ 
+                                backgroundColor: isCompleted ? habit.color : 'transparent',
+                                color: isCompleted ? 'white' : 'transparent'
+                              }}
+                            >
+                              {isCompleted && <Check className="w-5 h-5 stroke-[3]" />}
+                            </button>
+                          </td>
+                        );
+                      })}
+                      <td className="p-4 text-center border-b border-slate-100">
+                        <div className="flex flex-col items-center gap-1">
+                          <span className="text-sm font-bold text-slate-900">{progress}%</span>
+                          <div className="w-16 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                            <div 
+                              className="h-full transition-all duration-500"
+                              style={{ width: `${progress}%`, backgroundColor: habit.color }}
+                            />
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
-                  <div className="flex items-center gap-3">
-                    <button 
-                      onClick={() => startEditing(habit)}
-                      className="p-2 text-slate-300 hover:text-indigo-600 transition-all opacity-0 group-hover:opacity-100"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </button>
-                    <button 
-                      onClick={() => deleteHabit(habit.id)}
-                      className="p-2 text-slate-300 hover:text-red-500 transition-all opacity-0 group-hover:opacity-100"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                    <button 
-                      onClick={() => toggleHabit(habit.id, format(selectedDate, 'yyyy-MM-dd'))}
-                      className={cn(
-                        "w-14 h-14 rounded-2xl flex items-center justify-center transition-all shadow-lg",
-                        isCompleted 
-                          ? "bg-indigo-600 text-white shadow-indigo-200" 
-                          : "bg-slate-100 text-slate-400 hover:bg-slate-200"
-                      )}
-                    >
-                      {isCompleted ? <Check className="w-8 h-8 stroke-[3]" /> : <Plus className="w-8 h-8" />}
-                    </button>
-                  </div>
-                </div>
-
-                {/* History Grid */}
-                <div className="space-y-2">
-                  <div className="flex justify-between items-center px-1">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Last 30 Days</span>
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                      {history.filter(h => h.completed).length}/30 Completed
-                    </span>
-                  </div>
-                  <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-hide">
-                    {history.map((h, i) => (
-                      <div 
-                        key={i}
-                        title={h.date}
-                        className={cn(
-                          "w-3.5 h-3.5 rounded-sm shrink-0 transition-all",
-                          h.completed ? "" : "bg-slate-100"
-                        )}
-                        style={{ backgroundColor: h.completed ? habit.color : undefined }}
-                      />
-                    ))}
-                  </div>
-                </div>
-              </motion.div>
-            );
-          })
-        )}
+      {/* Summary Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex items-center gap-4">
+          <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center">
+            <Target className="w-6 h-6" />
+          </div>
+          <div>
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Total Habits</p>
+            <p className="text-2xl font-bold text-slate-900">{habits.length}</p>
+          </div>
+        </div>
+        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex items-center gap-4">
+          <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center">
+            <Award className="w-6 h-6" />
+          </div>
+          <div>
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Avg. Completion</p>
+            <p className="text-2xl font-bold text-slate-900">
+              {habits.length > 0 
+                ? Math.round(habits.reduce((acc, h) => {
+                    const completed = monthDays.filter(day => {
+                      const dateStr = format(day, 'yyyy-MM-dd');
+                      return habitLogs.find(l => l.habitId === h.id && l.date === dateStr)?.completed;
+                    }).length;
+                    return acc + (completed / monthDays.length);
+                  }, 0) / habits.length * 100)
+                : 0}%
+            </p>
+          </div>
+        </div>
+        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex items-center gap-4">
+          <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center">
+            <Flame className="w-6 h-6" />
+          </div>
+          <div>
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Best Streak</p>
+            <p className="text-2xl font-bold text-slate-900">
+              {habits.length > 0 ? Math.max(...habits.map(h => calculateStreak(h.id))) : 0} Days
+            </p>
+          </div>
+        </div>
       </div>
     </div>
   );
