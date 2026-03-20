@@ -94,5 +94,6 @@ export {
   deleteDoc,
   serverTimestamp,
   Timestamp,
-  collectionGroup
+  collectionGroup,
+  GoogleAuthProvider
 };

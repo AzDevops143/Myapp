@@ -26,7 +26,8 @@ import {
   serverTimestamp,
   Timestamp,
   handleFirestoreError,
-  OperationType
+  OperationType,
+  GoogleAuthProvider
 } from './firebase';
 import { 
   BookOpen, 
@@ -61,7 +62,9 @@ import {
   Music,
   Code,
   PenTool,
-  Award
+  Award,
+  Video,
+  ExternalLink
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -86,7 +89,10 @@ import {
   eachDayOfInterval, 
   isSameDay, 
   addMonths,
-  isToday
+  subMonths,
+  isToday,
+  startOfWeek,
+  endOfWeek
 } from 'date-fns';
 import { cn } from './lib/utils';
 
@@ -255,12 +261,16 @@ export default function App() {
   const handleLogin = async () => {
     try {
       const result = await signInWithGoogle();
-      // @ts-ignore - access token is on the credential
-      const credential = result.credential;
+      // Use GoogleAuthProvider to get the credential from the result
+      const credential = GoogleAuthProvider.credentialFromResult(result);
       const token = credential?.accessToken;
+      
       if (token) {
         setGoogleAccessToken(token);
         localStorage.setItem('google_access_token', token);
+        console.log("Google Access Token successfully captured.");
+      } else {
+        console.warn("No access token found in Google login result.");
       }
     } catch (error) {
       console.error("Login failed", error);
@@ -271,18 +281,32 @@ export default function App() {
     if (!googleAccessToken) return;
     setIsSyncingCalendar(true);
     try {
-      const response = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=' + new Date().toISOString(), {
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+      
+      const response = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${startOfToday.toISOString()}&orderBy=startTime&singleEvents=true`, {
         headers: {
           'Authorization': `Bearer ${googleAccessToken}`
         }
       });
+      
       if (response.status === 401) {
+        console.error("Calendar API: Unauthorized. Token might be expired.");
         setGoogleAccessToken(null);
         localStorage.removeItem('google_access_token');
         setIsSyncingCalendar(false);
         return;
       }
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error("Calendar API Error:", errorData);
+        setIsSyncingCalendar(false);
+        return;
+      }
+
       const data = await response.json();
+      console.log(`Fetched ${data.items?.length || 0} calendar events.`);
       setCalendarEvents(data.items || []);
     } catch (error) {
       console.error("Failed to fetch calendar events", error);
@@ -473,6 +497,7 @@ export default function App() {
                     habitLogs={habitLogs}
                     toggleHabit={toggleHabit}
                     user={user} 
+                    calendarEvents={calendarEvents}
                   />
                 </motion.div>
               )}
@@ -549,14 +574,15 @@ export default function App() {
 
 // --- Sub-Views ---
 
-function DashboardView({ subjects, sessions, topics, habits, habitLogs, toggleHabit, user }: { 
+function DashboardView({ subjects, sessions, topics, habits, habitLogs, toggleHabit, user, calendarEvents }: { 
   subjects: Subject[], 
   sessions: StudySession[], 
   topics: Topic[], 
   habits: Habit[], 
   habitLogs: HabitLog[], 
   toggleHabit: (id: string, date: string) => void,
-  user: User 
+  user: User,
+  calendarEvents: any[]
 }) {
   const stats = useMemo(() => {
     const totalMinutes = sessions.reduce((acc, s) => acc + s.durationMinutes, 0);
@@ -638,6 +664,92 @@ function DashboardView({ subjects, sessions, topics, habits, habitLogs, toggleHa
           value={`${stats.maxStreak} Days`} 
           subValue="Consistency is key"
         />
+      </div>
+
+      {/* Calendar Quick View & Recent Habits */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 bg-white rounded-3xl p-8 border border-slate-100 shadow-sm">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-indigo-50 rounded-lg">
+                <Calendar className="w-5 h-5 text-indigo-600" />
+              </div>
+              <h2 className="text-xl font-bold text-slate-900">Upcoming Events</h2>
+            </div>
+          </div>
+          
+          <div className="space-y-4">
+            {calendarEvents.length > 0 ? (
+              calendarEvents.slice(0, 3).map((event: any) => {
+                const start = event.start?.dateTime || event.start?.date;
+                const isExam = event.summary?.toLowerCase().includes('exam') || 
+                              event.summary?.toLowerCase().includes('test');
+                
+                return (
+                  <div key={event.id} className={`p-4 rounded-2xl border ${isExam ? 'bg-red-50 border-red-100' : 'bg-slate-50 border-slate-100'} flex items-center justify-between`}>
+                    <div className="flex-1">
+                      <h3 className={`font-semibold ${isExam ? 'text-red-900' : 'text-slate-900'}`}>
+                        {event.summary}
+                      </h3>
+                      <p className="text-sm text-slate-500">
+                        {start ? format(new Date(start), 'PPP p') : 'No date set'}
+                      </p>
+                      {event.hangoutLink && (
+                        <a 
+                          href={event.hangoutLink} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 px-2 py-1 rounded-lg transition-colors"
+                        >
+                          <Video className="w-3 h-3" />
+                          Join Google Meet
+                        </a>
+                      )}
+                    </div>
+                    {isExam && (
+                      <span className="px-3 py-1 bg-red-100 text-red-700 text-xs font-bold rounded-full uppercase tracking-wider shrink-0 ml-4">
+                        Exam
+                      </span>
+                    )}
+                  </div>
+                );
+              })
+            ) : (
+              <div className="text-center py-8 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                <p className="text-slate-500">No upcoming events synced.</p>
+                <p className="text-xs text-slate-400 mt-1">Check the Calendar tab to sync.</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="bg-white rounded-3xl p-8 border border-slate-100 shadow-sm">
+          <h2 className="text-xl font-bold text-slate-900 mb-6 flex items-center gap-3">
+            <div className="p-2 bg-emerald-50 rounded-lg">
+              <Flame className="w-5 h-5 text-emerald-600" />
+            </div>
+            Recent Habits
+          </h2>
+          <div className="space-y-4">
+            {habits.slice(0, 4).map(habit => {
+              const today = format(new Date(), 'yyyy-MM-dd');
+              const isDone = habitLogs.some(log => log.habitId === habit.id && log.date === today && log.completed);
+              return (
+                <div key={habit.id} className="flex items-center justify-between p-3 rounded-xl bg-slate-50">
+                  <span className="text-slate-700 font-medium">{habit.name}</span>
+                  <button
+                    onClick={() => toggleHabit(habit.id, today)}
+                    className={`p-2 rounded-lg transition-colors ${
+                      isDone ? 'bg-emerald-500 text-white' : 'bg-white text-slate-300 border border-slate-200'
+                    }`}
+                  >
+                    <CheckCircle2 className="w-5 h-5" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
       {/* Charts Section */}
@@ -1878,6 +1990,10 @@ function CalendarView({ events, isSyncing, onSync, googleAccessToken, onLogin }:
   googleAccessToken: string | null,
   onLogin: () => void
 }) {
+  const [currentMonth, setCurrentMonth] = useState(new Date());
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [selectedDay, setSelectedDay] = useState<Date | null>(null);
+
   if (!googleAccessToken) {
     return (
       <div className="flex flex-col items-center justify-center p-12 bg-white rounded-3xl border border-slate-100 shadow-sm text-center">
@@ -1898,74 +2014,297 @@ function CalendarView({ events, isSyncing, onSync, googleAccessToken, onLogin }:
     );
   }
 
+  const monthStart = startOfMonth(currentMonth);
+  const monthEnd = endOfMonth(monthStart);
+  const startDate = startOfWeek(monthStart);
+  const endDate = endOfWeek(monthEnd);
+
+  const calendarDays = eachDayOfInterval({
+    start: startDate,
+    end: endDate,
+  });
+
+  const nextMonth = () => setCurrentMonth(addMonths(currentMonth, 1));
+  const prevMonth = () => setCurrentMonth(subMonths(currentMonth, 1));
+
+  const getEventsForDay = (day: Date) => {
+    return events.filter(event => {
+      const start = event.start?.dateTime || event.start?.date;
+      return start && isSameDay(new Date(start), day);
+    });
+  };
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h3 className="text-2xl font-bold text-slate-900">Google Calendar</h3>
-          <p className="text-slate-500">Upcoming events and exams</p>
+          <p className="text-slate-500">Manage your entire schedule</p>
         </div>
-        <button 
-          onClick={onSync}
-          disabled={isSyncing}
-          className={cn(
-            "flex items-center gap-2 py-2 px-4 rounded-xl font-medium transition-all",
-            isSyncing ? "bg-slate-100 text-slate-400 cursor-not-allowed" : "bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
-          )}
-        >
-          <RotateCcw className={cn("w-4 h-4", isSyncing && "animate-spin")} />
-          {isSyncing ? 'Syncing...' : 'Sync Now'}
-        </button>
+        
+        <div className="flex items-center gap-3">
+          <div className="flex bg-slate-100 p-1 rounded-xl">
+            <button 
+              onClick={() => setViewMode('grid')}
+              className={cn(
+                "px-4 py-2 rounded-lg text-sm font-medium transition-all",
+                viewMode === 'grid' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+              )}
+            >
+              Grid
+            </button>
+            <button 
+              onClick={() => setViewMode('list')}
+              className={cn(
+                "px-4 py-2 rounded-lg text-sm font-medium transition-all",
+                viewMode === 'list' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+              )}
+            >
+              List
+            </button>
+          </div>
+
+          <button 
+            onClick={onSync}
+            disabled={isSyncing}
+            className={cn(
+              "flex items-center gap-2 py-2 px-4 rounded-xl font-medium transition-all",
+              isSyncing ? "bg-slate-100 text-slate-400 cursor-not-allowed" : "bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
+            )}
+          >
+            <RotateCcw className={cn("w-4 h-4", isSyncing && "animate-spin")} />
+            {isSyncing ? 'Syncing...' : 'Sync Now'}
+          </button>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {events.length === 0 ? (
-          <div className="col-span-full p-12 text-center bg-white rounded-3xl border border-slate-100">
-            <p className="text-slate-500">No upcoming events found.</p>
+      {viewMode === 'grid' ? (
+        <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
+          <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+            <h4 className="text-lg font-bold text-slate-900">{format(currentMonth, 'MMMM yyyy')}</h4>
+            <div className="flex items-center gap-2">
+              <button onClick={prevMonth} className="p-2 hover:bg-slate-50 rounded-lg transition-colors">
+                <ChevronLeft className="w-5 h-5 text-slate-600" />
+              </button>
+              <button onClick={() => setCurrentMonth(new Date())} className="px-3 py-1 text-sm font-medium text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
+                Today
+              </button>
+              <button onClick={nextMonth} className="p-2 hover:bg-slate-50 rounded-lg transition-colors">
+                <ChevronRight className="w-5 h-5 text-slate-600" />
+              </button>
+            </div>
           </div>
-        ) : (
-          events.map((event: any) => {
-            const start = event.start?.dateTime || event.start?.date;
-            const isExam = event.summary?.toLowerCase().includes('exam') || event.summary?.toLowerCase().includes('test');
-            
-            return (
-              <motion.div 
-                key={event.id}
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className={cn(
-                  "p-6 rounded-3xl border bg-white shadow-sm hover:shadow-md transition-all",
-                  isExam ? "border-red-100 bg-red-50/30" : "border-slate-100"
-                )}
-              >
-                <div className="flex items-start justify-between mb-4">
-                  <div className={cn(
-                    "w-10 h-10 rounded-xl flex items-center justify-center",
-                    isExam ? "bg-red-100 text-red-600" : "bg-indigo-50 text-indigo-600"
-                  )}>
-                    {isExam ? <AlertCircle className="w-5 h-5" /> : <Calendar className="w-5 h-5" />}
-                  </div>
-                  {isExam && (
-                    <span className="px-2 py-1 bg-red-100 text-red-600 text-[10px] font-bold uppercase tracking-wider rounded-lg">
-                      Exam Alert
-                    </span>
+
+          <div className="grid grid-cols-7 border-b border-slate-100 bg-slate-50/50">
+            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
+              <div key={day} className="py-3 text-center text-xs font-bold text-slate-400 uppercase tracking-wider">
+                {day}
+              </div>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-7">
+            {calendarDays.map((day, idx) => {
+              const dayEvents = getEventsForDay(day);
+              const isCurrentMonth = isSameDay(startOfMonth(day), monthStart);
+              
+              return (
+                <div 
+                  key={day.toString()} 
+                  onClick={() => setSelectedDay(day)}
+                  className={cn(
+                    "min-h-[120px] p-2 border-r border-b border-slate-100 transition-colors hover:bg-slate-50/30 cursor-pointer",
+                    !isCurrentMonth && "bg-slate-50/50",
+                    isSameDay(day, selectedDay || new Date(-1)) && "bg-indigo-50/50 ring-2 ring-inset ring-indigo-500 z-10",
+                    idx % 7 === 6 && "border-r-0"
                   )}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className={cn(
+                      "w-7 h-7 flex items-center justify-center text-sm font-bold rounded-full",
+                      isToday(day) ? "bg-indigo-600 text-white" : isCurrentMonth ? "text-slate-900" : "text-slate-300"
+                    )}>
+                      {format(day, 'd')}
+                    </span>
+                  </div>
+                  <div className="space-y-1">
+                    {dayEvents.slice(0, 3).map(event => {
+                      const isExam = event.summary?.toLowerCase().includes('exam') || event.summary?.toLowerCase().includes('test');
+                      return (
+                        <div 
+                          key={event.id}
+                          className={cn(
+                            "px-2 py-1 text-[10px] font-medium rounded-md truncate flex items-center gap-1",
+                            isExam ? "bg-red-100 text-red-700 border border-red-200" : "bg-indigo-50 text-indigo-700 border border-indigo-100"
+                          )}
+                          title={event.summary}
+                        >
+                          {event.hangoutLink && <Video className="w-2 h-2 shrink-0" />}
+                          <span className="truncate">{event.summary}</span>
+                        </div>
+                      );
+                    })}
+                    {dayEvents.length > 3 && (
+                      <div className="text-[10px] text-slate-400 pl-1 font-medium">
+                        + {dayEvents.length - 3} more
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <h4 className="font-bold text-slate-900 mb-1 line-clamp-1">{event.summary}</h4>
-                <p className="text-sm text-slate-500 mb-4">
-                  {start ? format(new Date(start), 'PPP p') : 'No date set'}
-                </p>
-                {event.location && (
-                  <p className="text-xs text-slate-400 flex items-center gap-1">
-                    <Target className="w-3 h-3" />
-                    {event.location}
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {events.length === 0 ? (
+            <div className="col-span-full p-12 text-center bg-white rounded-3xl border border-slate-100">
+              <p className="text-slate-500">No upcoming events found.</p>
+            </div>
+          ) : (
+            events.map((event: any) => {
+              const start = event.start?.dateTime || event.start?.date;
+              const isExam = event.summary?.toLowerCase().includes('exam') || event.summary?.toLowerCase().includes('test');
+              
+              return (
+                <motion.div 
+                  key={event.id}
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className={cn(
+                    "p-6 rounded-3xl border bg-white shadow-sm hover:shadow-md transition-all",
+                    isExam ? "border-red-100 bg-red-50/30" : "border-slate-100"
+                  )}
+                >
+                  <div className="flex items-start justify-between mb-4">
+                    <div className={cn(
+                      "w-10 h-10 rounded-xl flex items-center justify-center",
+                      isExam ? "bg-red-100 text-red-600" : "bg-indigo-50 text-indigo-600"
+                    )}>
+                      {isExam ? <AlertCircle className="w-5 h-5" /> : <Calendar className="w-5 h-5" />}
+                    </div>
+                    {isExam && (
+                      <span className="px-2 py-1 bg-red-100 text-red-600 text-[10px] font-bold uppercase tracking-wider rounded-lg">
+                        Exam Alert
+                      </span>
+                    )}
+                  </div>
+                  <h4 className="font-bold text-slate-900 mb-1 line-clamp-1">{event.summary}</h4>
+                  <p className="text-sm text-slate-500 mb-4">
+                    {start ? format(new Date(start), 'PPP p') : 'No date set'}
                   </p>
+                  <div className="flex flex-wrap gap-3">
+                    {event.location && (
+                      <p className="text-xs text-slate-400 flex items-center gap-1">
+                        <Target className="w-3 h-3" />
+                        {event.location}
+                      </p>
+                    )}
+                    {event.hangoutLink && (
+                      <a 
+                        href={event.hangoutLink} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1 bg-indigo-50 px-2 py-1 rounded-lg transition-colors"
+                      >
+                        <Video className="w-3 h-3" />
+                        Google Meet
+                        <ExternalLink className="w-2.5 h-2.5" />
+                      </a>
+                    )}
+                  </div>
+                </motion.div>
+              );
+            })
+          )}
+        </div>
+      )}
+
+      {/* Day Detail View */}
+      <AnimatePresence>
+        {selectedDay && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            className="bg-white rounded-3xl border border-slate-100 shadow-xl overflow-hidden mt-8"
+          >
+            <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-indigo-50/30">
+              <div>
+                <h4 className="text-lg font-bold text-slate-900">{format(selectedDay, 'PPPP')}</h4>
+                <p className="text-sm text-slate-500">{getEventsForDay(selectedDay).length} events scheduled</p>
+              </div>
+              <button 
+                onClick={() => setSelectedDay(null)}
+                className="p-2 hover:bg-white rounded-full transition-colors"
+              >
+                <X className="w-5 h-5 text-slate-400" />
+              </button>
+            </div>
+            <div className="p-6 max-h-[400px] overflow-y-auto">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {getEventsForDay(selectedDay).length > 0 ? (
+                  getEventsForDay(selectedDay).map((event: any) => {
+                    const start = event.start?.dateTime || event.start?.date;
+                    const isExam = event.summary?.toLowerCase().includes('exam') || event.summary?.toLowerCase().includes('test');
+                    
+                    return (
+                      <div 
+                        key={event.id}
+                        className={cn(
+                          "p-4 rounded-2xl border transition-all",
+                          isExam ? "border-red-100 bg-red-50/30" : "border-slate-100 bg-slate-50/30"
+                        )}
+                      >
+                        <div className="flex items-start justify-between mb-2">
+                          <div className={cn(
+                            "w-8 h-8 rounded-lg flex items-center justify-center",
+                            isExam ? "bg-red-100 text-red-600" : "bg-indigo-100 text-indigo-600"
+                          )}>
+                            {isExam ? <AlertCircle className="w-4 h-4" /> : <Calendar className="w-4 h-4" />}
+                          </div>
+                          {isExam && (
+                            <span className="px-2 py-0.5 bg-red-100 text-red-600 text-[10px] font-bold uppercase tracking-wider rounded-md">
+                              Exam
+                            </span>
+                          )}
+                        </div>
+                        <h5 className="font-bold text-slate-900 mb-1">{event.summary}</h5>
+                        <p className="text-xs text-slate-500 mb-3">
+                          {start ? format(new Date(start), 'p') : 'All day'}
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {event.hangoutLink && (
+                            <a 
+                              href={event.hangoutLink} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1 bg-white border border-indigo-100 px-2 py-1 rounded-md transition-colors"
+                            >
+                              <Video className="w-3 h-3" />
+                              Join Meet
+                            </a>
+                          )}
+                          {event.location && (
+                            <div className="text-[10px] text-slate-400 flex items-center gap-1 bg-white border border-slate-100 px-2 py-1 rounded-md">
+                              <Target className="w-3 h-3" />
+                              <span className="truncate max-w-[100px]">{event.location}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="col-span-full py-12 text-center">
+                    <p className="text-slate-400 italic">No events scheduled for this day.</p>
+                  </div>
                 )}
-              </motion.div>
-            );
-          })
+              </div>
+            </div>
+          </motion.div>
         )}
-      </div>
+      </AnimatePresence>
     </div>
   );
 }
