@@ -406,6 +406,13 @@ export default function App() {
     };
   }, [user]);
 
+  const calculateSubjectProgress = (subjectId: string) => {
+    const subjectTopics = topics.filter(t => t.subjectId === subjectId);
+    if (subjectTopics.length === 0) return 0;
+    const completed = subjectTopics.filter(t => t.status === 'completed').length;
+    return Math.round((completed / subjectTopics.length) * 100);
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
@@ -547,6 +554,7 @@ export default function App() {
                     isSyncing={isSyncingCalendar}
                     onSync={fetchCalendarEvents}
                     syncError={calendarSyncError}
+                    calculateSubjectProgress={calculateSubjectProgress}
                   />
                 </motion.div>
               )}
@@ -563,6 +571,7 @@ export default function App() {
                     selectedSubject={selectedSubject}
                     setSelectedSubject={setSelectedSubject}
                     user={user}
+                    calculateSubjectProgress={calculateSubjectProgress}
                   />
                 </motion.div>
               )}
@@ -624,7 +633,7 @@ export default function App() {
 
 // --- Sub-Views ---
 
-function DashboardView({ subjects, sessions, topics, habits, habitLogs, toggleHabit, user, calendarEvents, isSyncing, onSync, syncError }: { 
+function DashboardView({ subjects, sessions, topics, habits, habitLogs, toggleHabit, user, calendarEvents, isSyncing, onSync, syncError, calculateSubjectProgress }: { 
   subjects: Subject[], 
   sessions: StudySession[], 
   topics: Topic[], 
@@ -635,7 +644,8 @@ function DashboardView({ subjects, sessions, topics, habits, habitLogs, toggleHa
   calendarEvents: any[],
   isSyncing: boolean,
   onSync: () => void,
-  syncError: string | null
+  syncError: string | null,
+  calculateSubjectProgress: (id: string) => number
 }) {
   const stats = useMemo(() => {
     const totalMinutes = sessions.reduce((acc, s) => acc + s.durationMinutes, 0);
@@ -928,21 +938,58 @@ function DashboardView({ subjects, sessions, topics, habits, habitLogs, toggleHa
                 const subjectMins = sessions
                   .filter(s => s.subjectId === subject.id)
                   .reduce((acc, s) => acc + s.durationMinutes, 0);
-                const percentage = stats.totalMinutes > 0 ? (subjectMins / stats.totalMinutes) * 100 : 0;
                 
                 return (
                   <div key={subject.id} className="space-y-1">
                     <div className="flex justify-between text-sm">
-                      <span className="font-medium text-slate-700">{subject.name}</span>
-                      <span className="text-slate-500">{Math.round(subjectMins / 60)}h</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-slate-700">{subject.name}</span>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase">
+                          {Math.round(subjectMins / 60)}h • {calculateSubjectProgress(subject.id)}%
+                        </span>
+                      </div>
+                      <span className="text-slate-500 font-bold">{calculateSubjectProgress(subject.id)}%</span>
                     </div>
                     <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
                       <motion.div 
                         initial={{ width: 0 }}
-                        animate={{ width: `${percentage}%` }}
+                        animate={{ width: `${calculateSubjectProgress(subject.id)}%` }}
                         className="h-full"
                         style={{ backgroundColor: subject.color }}
                       />
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* Recent Sessions */}
+        <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
+          <h3 className="text-lg font-bold text-slate-900 mb-6 flex items-center gap-2">
+            <Clock className="w-5 h-5 text-indigo-600" />
+            Recent Sessions
+          </h3>
+          <div className="space-y-4">
+            {sessions.length === 0 ? (
+              <p className="text-slate-400 text-center py-12">No study sessions yet.</p>
+            ) : (
+              sessions.slice(0, 5).map(session => {
+                const subject = subjects.find(s => s.id === session.subjectId);
+                const topic = topics.find(t => t.id === session.topicId);
+                return (
+                  <div key={session.id} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100 hover:border-indigo-100 transition-all">
+                    <div className="flex items-center gap-4">
+                      <div className="w-1.5 h-10 rounded-full" style={{ backgroundColor: subject?.color || '#cbd5e1' }} />
+                      <div>
+                        <p className="font-bold text-slate-800">{topic?.name || 'Unknown Topic'}</p>
+                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">{subject?.name || 'Unknown Subject'}</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="font-bold text-indigo-600">{Math.round(session.durationMinutes)}m</p>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase">{format(session.startTime.toDate(), 'MMM d, h:mm a')}</p>
                     </div>
                   </div>
                 );
@@ -955,12 +1002,13 @@ function DashboardView({ subjects, sessions, topics, habits, habitLogs, toggleHa
   );
 }
 
-function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, user }: { 
+function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, user, calculateSubjectProgress }: { 
   subjects: Subject[], 
   topics: Topic[],
   selectedSubject: Subject | null,
   setSelectedSubject: (s: Subject | null) => void,
-  user: User 
+  user: User,
+  calculateSubjectProgress: (id: string) => number
 }) {
   const SUBJECT_COLORS = ['#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316'];
   const [newSubjectName, setNewSubjectName] = useState('');
@@ -969,6 +1017,7 @@ function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, u
   const [newTopicNotes, setNewTopicNotes] = useState('');
   const [newTopicPriority, setNewTopicPriority] = useState<Topic['priority']>('medium');
   const [isAddingSubject, setIsAddingSubject] = useState(false);
+  const [editingSubjectId, setEditingSubjectId] = useState<string | null>(null);
   const [isAddingTopic, setIsAddingTopic] = useState(false);
   const [newTopicFiles, setNewTopicFiles] = useState<File[]>([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -1049,17 +1098,33 @@ function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, u
     e.preventDefault();
     if (!newSubjectName.trim()) return;
     try {
-      await addDoc(collection(db, 'users', user.uid, 'subjects'), {
-        name: newSubjectName,
-        color: newSubjectColor,
-        createdAt: serverTimestamp()
-      });
+      if (editingSubjectId) {
+        await updateDoc(doc(db, 'users', user.uid, 'subjects', editingSubjectId), {
+          name: newSubjectName,
+          color: newSubjectColor,
+          updatedAt: serverTimestamp()
+        });
+      } else {
+        await addDoc(collection(db, 'users', user.uid, 'subjects'), {
+          name: newSubjectName,
+          color: newSubjectColor,
+          createdAt: serverTimestamp()
+        });
+      }
       setNewSubjectName('');
       setNewSubjectColor(SUBJECT_COLORS[Math.floor(Math.random() * SUBJECT_COLORS.length)]);
       setIsAddingSubject(false);
+      setEditingSubjectId(null);
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, `users/${user.uid}/subjects`);
+      handleFirestoreError(error, editingSubjectId ? OperationType.UPDATE : OperationType.CREATE, `users/${user.uid}/subjects${editingSubjectId ? '/' + editingSubjectId : ''}`);
     }
+  };
+
+  const startEditingSubject = (subject: Subject) => {
+    setEditingSubjectId(subject.id);
+    setNewSubjectName(subject.name);
+    setNewSubjectColor(subject.color);
+    setIsAddingSubject(true);
   };
 
   const handleAddTopic = async (e: React.FormEvent) => {
@@ -1200,13 +1265,6 @@ function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, u
     return subjectTopics.filter(t => t.status === statusFilter);
   }, [topics, statusFilter, selectedSubject]);
 
-  const calculateSubjectProgress = (subjectId: string) => {
-    const subjectTopics = topics.filter(t => t.subjectId === subjectId);
-    if (subjectTopics.length === 0) return 0;
-    const completedTopics = subjectTopics.filter(t => t.status === 'completed').length;
-    return Math.round((completedTopics / subjectTopics.length) * 100);
-  };
-
   const formatFileSize = (bytes: number | undefined) => {
     if (!bytes || bytes === 0) return '0 Bytes';
     const k = 1024;
@@ -1264,8 +1322,20 @@ function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, u
             </div>
 
             <div className="flex gap-2">
-              <button type="submit" className="flex-1 py-2 bg-indigo-600 text-white rounded-lg font-medium">Add</button>
-              <button type="button" onClick={() => setIsAddingSubject(false)} className="px-4 py-2 bg-slate-100 text-slate-600 rounded-lg font-medium">Cancel</button>
+              <button type="submit" className="flex-1 py-2 bg-indigo-600 text-white rounded-lg font-medium">
+                {editingSubjectId ? 'Save Changes' : 'Add'}
+              </button>
+              <button 
+                type="button" 
+                onClick={() => {
+                  setIsAddingSubject(false);
+                  setEditingSubjectId(null);
+                  setNewSubjectName('');
+                }} 
+                className="px-4 py-2 bg-slate-100 text-slate-600 rounded-lg font-medium"
+              >
+                Cancel
+              </button>
             </div>
           </motion.form>
         )}
@@ -1289,12 +1359,20 @@ function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, u
                     <div className="w-3 h-3 rounded-full" style={{ backgroundColor: subject.color }} />
                     <span className="font-semibold text-slate-700">{subject.name}</span>
                   </div>
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); deleteSubject(subject.id); }}
-                    className="opacity-0 group-hover:opacity-100 p-2 text-slate-400 hover:text-red-500 transition-all"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); startEditingSubject(subject); }}
+                      className="p-2 text-slate-400 hover:text-indigo-600 transition-all"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); deleteSubject(subject.id); }}
+                      className="p-2 text-slate-400 hover:text-red-500 transition-all"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
                 
                 <div className="space-y-1.5">
@@ -1692,6 +1770,13 @@ function TimerView({ subjects, topics, sessions, user }: { subjects: Subject[], 
   const [editingSessionNotes, setEditingSessionNotes] = useState('');
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
 
+  const totalTimeToday = useMemo(() => {
+    const today = startOfDay(new Date());
+    return sessions
+      .filter(s => s.startTime.toDate() >= today)
+      .reduce((acc, s) => acc + s.durationMinutes, 0);
+  }, [sessions]);
+
   useEffect(() => {
     if (saveStatus === 'success' || saveStatus === 'error') {
       const timer = setTimeout(() => setSaveStatus('idle'), 3000);
@@ -1756,6 +1841,22 @@ function TimerView({ subjects, topics, sessions, user }: { subjects: Subject[], 
 
   return (
     <div className="max-w-2xl mx-auto space-y-8">
+      <div className="flex items-center justify-between bg-white px-8 py-4 rounded-3xl border border-slate-200 shadow-sm">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-indigo-50 rounded-xl">
+            <Clock className="w-5 h-5 text-indigo-600" />
+          </div>
+          <div>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Studied Today</p>
+            <p className="text-xl font-bold text-slate-900">{Math.round(totalTimeToday)}m</p>
+          </div>
+        </div>
+        <div className="text-right">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sessions</p>
+          <p className="text-xl font-bold text-slate-900">{sessions.filter(s => isToday(s.startTime.toDate())).length}</p>
+        </div>
+      </div>
+
       <div className="bg-white p-12 rounded-[40px] border border-slate-200 shadow-xl text-center space-y-8">
         <div className="space-y-2">
           <h3 className="text-slate-500 font-medium uppercase tracking-widest text-sm">Focus Timer</h3>
