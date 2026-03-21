@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { Component, useState, useEffect, useMemo } from 'react';
 import { 
   auth, 
   db, 
@@ -27,7 +27,12 @@ import {
   Timestamp,
   handleFirestoreError,
   OperationType,
-  GoogleAuthProvider
+  GoogleAuthProvider,
+  ref,
+  uploadBytes,
+  getDownloadURL,
+  deleteObject,
+  storage
 } from './firebase';
 import { 
   BookOpen, 
@@ -64,9 +69,14 @@ import {
   PenTool,
   Award,
   Video,
-  ExternalLink
+  ExternalLink,
+  Paperclip,
+  FileText,
+  File,
+  Download,
+  Loader2
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { 
   BarChart, 
   Bar, 
@@ -130,6 +140,13 @@ interface Topic {
   status: 'not-started' | 'in-progress' | 'completed';
   priority: 'low' | 'medium' | 'high';
   notes?: string;
+  attachments?: {
+    name: string;
+    url: string;
+    type: string;
+    size: number;
+    createdAt: any;
+  }[];
   updatedAt: any;
 }
 
@@ -171,7 +188,7 @@ const ErrorBoundary = ({ children }: { children: React.ReactNode }) => {
         <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full text-center">
           <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
           <h2 className="text-2xl font-bold text-gray-900 mb-2">Something went wrong</h2>
-          <p className="text-gray-600 mb-6">
+          <p className="text-gray-600 mb-6 text-sm">
             {error?.message || "An unexpected error occurred. Please try refreshing the page."}
           </p>
           <button 
@@ -186,7 +203,14 @@ const ErrorBoundary = ({ children }: { children: React.ReactNode }) => {
   }
 
   return (
-    <div onError={(e) => { setHasError(true); setError(e); }}>
+    <div onError={(e) => { 
+      // Only catch media errors if they are not handled by the element itself
+      if (e.target instanceof HTMLImageElement && e.target.src.includes('logo.png')) {
+        return;
+      }
+      setHasError(true); 
+      setError(e); 
+    }}>
       {children}
     </div>
   );
@@ -402,7 +426,14 @@ export default function App() {
           className="max-w-md w-full bg-white p-8 rounded-3xl shadow-xl border border-slate-100 text-center"
         >
           <div className="w-24 h-24 bg-[#0a192f] rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg shadow-slate-200 overflow-hidden">
-            <img src="/logo.png" className="w-full h-full object-cover" alt="CHARANTEJP" />
+            <img 
+              src="/logo.png" 
+              className="w-full h-full object-cover" 
+              alt="CHARANTEJP" 
+              onError={(e) => {
+                (e.target as HTMLImageElement).src = "https://picsum.photos/seed/study/200/200";
+              }}
+            />
           </div>
           <h1 className="text-3xl font-bold text-slate-900 mb-2">CHARANTEJP</h1>
           <p className="text-slate-500 mb-8">Master your syllabus with data-driven study tracking.</p>
@@ -426,7 +457,14 @@ export default function App() {
         <aside className="w-20 lg:w-64 bg-white border-r border-slate-200 flex flex-col">
           <div className="p-6 flex items-center gap-3">
             <div className="w-10 h-10 bg-[#0a192f] rounded-xl flex items-center justify-center shrink-0 overflow-hidden">
-              <img src="/logo.png" className="w-full h-full object-cover" alt="Logo" />
+              <img 
+                src="/logo.png" 
+                className="w-full h-full object-cover" 
+                alt="Logo" 
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = "https://picsum.photos/seed/study/100/100";
+                }}
+              />
             </div>
             <span className="hidden lg:block font-bold text-xl text-slate-900">CHARANTEJP</span>
           </div>
@@ -931,29 +969,60 @@ function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, u
   const [newTopicPriority, setNewTopicPriority] = useState<Topic['priority']>('medium');
   const [isAddingSubject, setIsAddingSubject] = useState(false);
   const [isAddingTopic, setIsAddingTopic] = useState(false);
+  const [newTopicFiles, setNewTopicFiles] = useState<File[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
   const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
   const [editingTopicName, setEditingTopicName] = useState('');
   const [editingTopicPriority, setEditingTopicPriority] = useState<Topic['priority']>('medium');
+  const [editingTopicAttachments, setEditingTopicAttachments] = useState<Topic['attachments']>([]);
   const [statusFilter, setStatusFilter] = useState<'all' | Topic['status']>('all');
 
   const startEditing = (topic: Topic) => {
     setEditingTopicId(topic.id);
     setEditingTopicName(topic.name);
     setEditingTopicPriority(topic.priority);
+    setEditingTopicAttachments(topic.attachments || []);
+  };
+
+  const uploadFiles = async (files: File[], topicId: string): Promise<Topic['attachments']> => {
+    if (!user || !selectedSubject) return [];
+    const uploadedAttachments: Topic['attachments'] = [];
+    
+    for (const file of files) {
+      const storageRef = ref(storage, `users/${user.uid}/subjects/${selectedSubject.id}/topics/${topicId}/${Date.now()}_${file.name}`);
+      await uploadBytes(storageRef, file);
+      const url = await getDownloadURL(storageRef);
+      uploadedAttachments.push({
+        name: file.name,
+        url,
+        type: file.type,
+        size: file.size,
+        createdAt: new Date().toISOString()
+      });
+    }
+    return uploadedAttachments;
   };
 
   const handleUpdateTopic = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingTopicName.trim() || !selectedSubject || !editingTopicId) return;
+    setIsUploading(true);
     try {
+      const newUploaded = await uploadFiles(newTopicFiles, editingTopicId);
+      const allAttachments = [...(editingTopicAttachments || []), ...newUploaded];
+      
       await updateDoc(doc(db, 'users', user.uid, 'subjects', selectedSubject.id, 'topics', editingTopicId), {
         name: editingTopicName,
         priority: editingTopicPriority,
+        attachments: allAttachments,
         updatedAt: serverTimestamp()
       });
       setEditingTopicId(null);
+      setNewTopicFiles([]);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `users/${user.uid}/subjects/${selectedSubject.id}/topics/${editingTopicId}`);
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -977,8 +1046,10 @@ function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, u
   const handleAddTopic = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTopicName.trim() || !selectedSubject) return;
+    setIsUploading(true);
     try {
-      await addDoc(collection(db, 'users', user.uid, 'subjects', selectedSubject.id, 'topics'), {
+      // Create the topic first to get an ID (or use a temporary one for storage path)
+      const topicRef = await addDoc(collection(db, 'users', user.uid, 'subjects', selectedSubject.id, 'topics'), {
         name: newTopicName,
         status: 'not-started',
         priority: newTopicPriority,
@@ -986,11 +1057,40 @@ function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, u
         uid: user.uid,
         updatedAt: serverTimestamp()
       });
+
+      const uploadedAttachments = await uploadFiles(newTopicFiles, topicRef.id);
+      
+      if (uploadedAttachments.length > 0) {
+        await updateDoc(topicRef, {
+          attachments: uploadedAttachments
+        });
+      }
+
       setNewTopicName('');
       setNewTopicPriority('medium');
+      setNewTopicFiles([]);
       setIsAddingTopic(false);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, `users/${user.uid}/subjects/${selectedSubject.id}/topics`);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const removeAttachment = async (topic: Topic, attachmentUrl: string) => {
+    if (!selectedSubject || !user) return;
+    try {
+      const updatedAttachments = topic.attachments?.filter(a => a.url !== attachmentUrl) || [];
+      await updateDoc(doc(db, 'users', user.uid, 'subjects', selectedSubject.id, 'topics', topic.id), {
+        attachments: updatedAttachments,
+        updatedAt: serverTimestamp()
+      });
+      
+      // Optionally delete from storage too
+      // const storageRef = ref(storage, attachmentUrl);
+      // await deleteObject(storageRef);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${user.uid}/subjects/${selectedSubject.id}/topics/${topic.id}`);
     }
   };
 
@@ -1060,6 +1160,15 @@ function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, u
     if (subjectTopics.length === 0) return 0;
     const completedTopics = subjectTopics.filter(t => t.status === 'completed').length;
     return Math.round((completedTopics / subjectTopics.length) * 100);
+  };
+
+  const formatFileSize = (bytes: number | undefined) => {
+    if (!bytes || bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    if (isNaN(i)) return '0 Bytes';
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
   return (
@@ -1247,11 +1356,63 @@ function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, u
                       ))}
                     </div>
                   </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-slate-400 uppercase flex items-center gap-2">
+                      <Paperclip className="w-4 h-4" />
+                      Attachments
+                    </label>
+                    <div className="flex flex-col gap-2">
+                      <input 
+                        type="file" 
+                        multiple 
+                        className="hidden" 
+                        id="new-topic-files"
+                        onChange={(e) => {
+                          if (e.target.files) {
+                            setNewTopicFiles(Array.from(e.target.files));
+                          }
+                        }}
+                      />
+                      <label 
+                        htmlFor="new-topic-files"
+                        className="flex items-center justify-center gap-2 p-4 border-2 border-dashed border-slate-200 rounded-2xl hover:border-indigo-300 hover:bg-indigo-50 transition-all cursor-pointer"
+                      >
+                        <Plus className="w-5 h-5 text-slate-400" />
+                        <span className="text-sm font-medium text-slate-500">
+                          {newTopicFiles.length > 0 ? `${newTopicFiles.length} files selected` : "Add files (PDF, Images, etc.)"}
+                        </span>
+                      </label>
+                      {newTopicFiles.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {newTopicFiles.map((file, idx) => (
+                            <div key={idx} className="flex items-center gap-2 px-3 py-1 bg-slate-100 rounded-lg text-xs font-medium text-slate-600">
+                              <File className="w-3 h-3" />
+                              {file.name}
+                              <button 
+                                type="button"
+                                onClick={() => setNewTopicFiles(prev => prev.filter((_, i) => i !== idx))}
+                                className="hover:text-red-500"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
                 <div className="flex justify-end gap-3 pt-2">
-                  <button type="button" onClick={() => setIsAddingTopic(false)} className="px-6 py-2 text-slate-500 font-medium">Cancel</button>
-                  <button type="submit" className="px-8 py-2 bg-indigo-600 text-white rounded-xl font-bold">Create Topic</button>
+                  <button type="button" onClick={() => { setIsAddingTopic(false); setNewTopicFiles([]); }} className="px-6 py-2 text-slate-500 font-medium">Cancel</button>
+                  <button 
+                    type="submit" 
+                    disabled={isUploading}
+                    className="px-8 py-2 bg-indigo-600 text-white rounded-xl font-bold flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {isUploading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Create Topic"}
+                  </button>
                 </div>
               </motion.form>
             )}
@@ -1274,91 +1435,171 @@ function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, u
                   >
                     {editingTopicId === topic.id ? (
                       <form onSubmit={handleUpdateTopic} className="space-y-4">
-                        <div className="flex gap-4">
-                          <input 
-                            autoFocus
-                            type="text" 
-                            className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                            value={editingTopicName}
-                            onChange={(e) => setEditingTopicName(e.target.value)}
-                          />
-                          <div className="flex gap-2">
-                            {(['low', 'medium', 'high'] as const).map((p) => (
-                              <button
-                                key={p}
-                                type="button"
-                                onClick={() => setEditingTopicPriority(p)}
-                                className={cn(
-                                  "px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all",
-                                  editingTopicPriority === p 
-                                    ? p === 'high' ? "bg-red-600 text-white" :
-                                      p === 'medium' ? "bg-amber-500 text-white" :
-                                      "bg-slate-600 text-white"
-                                    : "bg-slate-100 text-slate-400"
-                                )}
-                              >
-                                {p}
-                              </button>
-                            ))}
+                        <div className="flex flex-col gap-4">
+                          <div className="flex gap-4">
+                            <input 
+                              autoFocus
+                              type="text" 
+                              className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                              value={editingTopicName}
+                              onChange={(e) => setEditingTopicName(e.target.value)}
+                            />
+                            <div className="flex gap-2">
+                              {(['low', 'medium', 'high'] as const).map((p) => (
+                                <button
+                                  key={p}
+                                  type="button"
+                                  onClick={() => setEditingTopicPriority(p)}
+                                  className={cn(
+                                    "px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all",
+                                    editingTopicPriority === p 
+                                      ? p === 'high' ? "bg-red-600 text-white" :
+                                        p === 'medium' ? "bg-amber-500 text-white" :
+                                        "bg-slate-600 text-white"
+                                      : "bg-slate-100 text-slate-400"
+                                  )}
+                                >
+                                  {p}
+                                </button>
+                              ))}
+                            </div>
                           </div>
+
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase">Add More Attachments:</label>
+                            <input 
+                              type="file" 
+                              multiple 
+                              className="hidden" 
+                              id={`edit-topic-files-${topic.id}`}
+                              onChange={(e) => {
+                                if (e.target.files) {
+                                  setNewTopicFiles(Array.from(e.target.files));
+                                }
+                              }}
+                            />
+                            <label 
+                              htmlFor={`edit-topic-files-${topic.id}`}
+                              className="flex items-center justify-center gap-2 p-3 border-2 border-dashed border-slate-200 rounded-xl hover:border-indigo-300 hover:bg-indigo-50 transition-all cursor-pointer"
+                            >
+                              <Plus className="w-4 h-4 text-slate-400" />
+                              <span className="text-xs font-medium text-slate-500">
+                                {newTopicFiles.length > 0 ? `${newTopicFiles.length} files selected` : "Upload more files"}
+                              </span>
+                            </label>
+                          </div>
+
+                          {editingTopicAttachments && editingTopicAttachments.length > 0 && (
+                            <div className="space-y-2">
+                              <label className="text-xs font-bold text-slate-400 uppercase">Current Attachments:</label>
+                              <div className="flex flex-wrap gap-2">
+                                {editingTopicAttachments.map((att, idx) => (
+                                  <div key={idx} className="flex items-center gap-2 px-3 py-1 bg-indigo-50 rounded-lg text-xs font-medium text-indigo-600">
+                                    <FileText className="w-3 h-3" />
+                                    <span className="truncate max-w-[150px]">{att.name}</span>
+                                    <button 
+                                      type="button"
+                                      onClick={() => setEditingTopicAttachments(prev => prev?.filter(a => a.url !== att.url))}
+                                      className="hover:text-red-500"
+                                    >
+                                      <X className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
+
                         <div className="flex justify-end gap-2">
                           <button 
                             type="button" 
-                            onClick={() => setEditingTopicId(null)}
+                            onClick={() => { setEditingTopicId(null); setNewTopicFiles([]); }} 
                             className="px-4 py-1.5 text-slate-500 text-sm font-medium"
                           >
                             Cancel
                           </button>
                           <button 
-                            type="submit"
-                            className="px-6 py-1.5 bg-indigo-600 text-white rounded-lg text-sm font-bold"
+                            type="submit" 
+                            disabled={isUploading}
+                            className="px-6 py-1.5 bg-indigo-600 text-white rounded-lg text-sm font-bold flex items-center gap-2 disabled:opacity-50"
                           >
-                            Save Changes
+                            {isUploading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save Changes"}
                           </button>
                         </div>
                       </form>
                     ) : (
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-4">
-                          <button 
-                            onClick={() => toggleTopicStatus(topic)}
-                            className={cn(
-                              "w-8 h-8 rounded-full flex items-center justify-center transition-all",
-                              topic.status === 'completed' ? "bg-emerald-100 text-emerald-600" :
-                              topic.status === 'in-progress' ? "bg-amber-100 text-amber-600" :
-                              "bg-slate-100 text-slate-400"
-                            )}
-                          >
-                            {topic.status === 'completed' ? <CheckCircle2 className="w-5 h-5" /> : <div className="w-2 h-2 rounded-full bg-current" />}
-                          </button>
-                          <div>
-                            <h4 className={cn("font-semibold", topic.status === 'completed' ? "text-slate-400 line-through" : "text-slate-700")}>
-                              {topic.name}
-                            </h4>
-                            <span className="text-xs font-medium uppercase tracking-wider text-slate-400">{topic.status.replace('-', ' ')}</span>
+                      <div className="flex flex-col gap-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-4">
+                            <button 
+                              onClick={() => toggleTopicStatus(topic)}
+                              className={cn(
+                                "w-8 h-8 rounded-full flex items-center justify-center transition-all",
+                                topic.status === 'completed' ? "bg-emerald-100 text-emerald-600" :
+                                topic.status === 'in-progress' ? "bg-amber-100 text-amber-600" :
+                                "bg-slate-100 text-slate-400"
+                              )}
+                            >
+                              {topic.status === 'completed' ? <CheckCircle2 className="w-5 h-5" /> : <div className="w-2 h-2 rounded-full bg-current" />}
+                            </button>
+                            <div>
+                              <h4 className={cn("font-semibold", topic.status === 'completed' ? "text-slate-400 line-through" : "text-slate-700")}>
+                                {topic.name}
+                              </h4>
+                              <span className="text-xs font-medium uppercase tracking-wider text-slate-400">{topic.status.replace('-', ' ')}</span>
+                            </div>
+                          </div>
+                          
+                          <div className="flex items-center gap-3">
+                            <button
+                              onClick={() => startEditing(topic)}
+                              className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                            >
+                              <Pencil className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => toggleTopicPriority(topic)}
+                              className={cn(
+                                "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest transition-all hover:scale-105 active:scale-95",
+                                topic.priority === 'high' ? "bg-red-50 text-red-600 hover:bg-red-100" :
+                                topic.priority === 'medium' ? "bg-amber-50 text-amber-600 hover:bg-amber-100" :
+                                "bg-slate-50 text-slate-500 hover:bg-slate-100"
+                              )}
+                            >
+                              {topic.priority}
+                            </button>
+                            <button 
+                              onClick={() => {
+                                if (window.confirm('Delete this topic?')) {
+                                  deleteDoc(doc(db, 'users', user.uid, 'subjects', selectedSubject.id, 'topics', topic.id));
+                                }
+                              }}
+                              className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
                           </div>
                         </div>
-                        
-                        <div className="flex items-center gap-3">
-                          <button
-                            onClick={() => startEditing(topic)}
-                            className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
-                          >
-                            <Pencil className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => toggleTopicPriority(topic)}
-                            className={cn(
-                              "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest transition-all hover:scale-105 active:scale-95",
-                              topic.priority === 'high' ? "bg-red-50 text-red-600 hover:bg-red-100" :
-                              topic.priority === 'medium' ? "bg-amber-50 text-amber-600 hover:bg-amber-100" :
-                              "bg-slate-50 text-slate-500 hover:bg-slate-100"
-                            )}
-                          >
-                            {topic.priority}
-                          </button>
-                        </div>
+
+                        {topic.attachments && topic.attachments.length > 0 && (
+                          <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-50">
+                            {topic.attachments.map((att, idx) => (
+                              <a 
+                                key={idx}
+                                href={att.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-100 rounded-xl text-xs font-medium text-slate-600 hover:bg-indigo-50 hover:border-indigo-100 hover:text-indigo-600 transition-all group/att"
+                              >
+                                <Paperclip className="w-3 h-3" />
+                                <span className="truncate max-w-[120px]">{att.name}</span>
+                                <span className="text-[9px] text-slate-400">({formatFileSize(att.size)})</span>
+                                <Download className="w-3 h-3 ml-1 opacity-0 group-hover/att:opacity-100" />
+                              </a>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
