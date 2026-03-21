@@ -966,6 +966,7 @@ function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, u
   const [newSubjectName, setNewSubjectName] = useState('');
   const [newSubjectColor, setNewSubjectColor] = useState(SUBJECT_COLORS[0]);
   const [newTopicName, setNewTopicName] = useState('');
+  const [newTopicNotes, setNewTopicNotes] = useState('');
   const [newTopicPriority, setNewTopicPriority] = useState<Topic['priority']>('medium');
   const [isAddingSubject, setIsAddingSubject] = useState(false);
   const [isAddingTopic, setIsAddingTopic] = useState(false);
@@ -973,15 +974,19 @@ function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, u
   const [isUploading, setIsUploading] = useState(false);
   const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
   const [editingTopicName, setEditingTopicName] = useState('');
+  const [editingTopicNotes, setEditingTopicNotes] = useState('');
   const [editingTopicPriority, setEditingTopicPriority] = useState<Topic['priority']>('medium');
   const [editingTopicAttachments, setEditingTopicAttachments] = useState<Topic['attachments']>([]);
+  const [attachmentsToDelete, setAttachmentsToDelete] = useState<string[]>([]);
   const [statusFilter, setStatusFilter] = useState<'all' | Topic['status']>('all');
 
   const startEditing = (topic: Topic) => {
     setEditingTopicId(topic.id);
     setEditingTopicName(topic.name);
+    setEditingTopicNotes(topic.notes || '');
     setEditingTopicPriority(topic.priority);
     setEditingTopicAttachments(topic.attachments || []);
+    setAttachmentsToDelete([]);
   };
 
   const uploadFiles = async (files: File[], topicId: string): Promise<Topic['attachments']> => {
@@ -1008,16 +1013,30 @@ function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, u
     if (!editingTopicName.trim() || !selectedSubject || !editingTopicId) return;
     setIsUploading(true);
     try {
+      // Delete removed attachments from storage
+      if (attachmentsToDelete.length > 0) {
+        for (const url of attachmentsToDelete) {
+          try {
+            const storageRef = ref(storage, url);
+            await deleteObject(storageRef);
+          } catch (e) {
+            console.error("Failed to delete removed attachment from storage:", e);
+          }
+        }
+      }
+
       const newUploaded = await uploadFiles(newTopicFiles, editingTopicId);
       const allAttachments = [...(editingTopicAttachments || []), ...newUploaded];
       
       await updateDoc(doc(db, 'users', user.uid, 'subjects', selectedSubject.id, 'topics', editingTopicId), {
         name: editingTopicName,
+        notes: editingTopicNotes,
         priority: editingTopicPriority,
         attachments: allAttachments,
         updatedAt: serverTimestamp()
       });
       setEditingTopicId(null);
+      setEditingTopicNotes('');
       setNewTopicFiles([]);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `users/${user.uid}/subjects/${selectedSubject.id}/topics/${editingTopicId}`);
@@ -1051,6 +1070,7 @@ function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, u
       // Create the topic first to get an ID (or use a temporary one for storage path)
       const topicRef = await addDoc(collection(db, 'users', user.uid, 'subjects', selectedSubject.id, 'topics'), {
         name: newTopicName,
+        notes: newTopicNotes,
         status: 'not-started',
         priority: newTopicPriority,
         subjectId: selectedSubject.id,
@@ -1067,6 +1087,7 @@ function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, u
       }
 
       setNewTopicName('');
+      setNewTopicNotes('');
       setNewTopicPriority('medium');
       setNewTopicFiles([]);
       setIsAddingTopic(false);
@@ -1086,11 +1107,35 @@ function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, u
         updatedAt: serverTimestamp()
       });
       
-      // Optionally delete from storage too
-      // const storageRef = ref(storage, attachmentUrl);
-      // await deleteObject(storageRef);
+      // Delete from storage
+      const storageRef = ref(storage, attachmentUrl);
+      await deleteObject(storageRef);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `users/${user.uid}/subjects/${selectedSubject.id}/topics/${topic.id}`);
+    }
+  };
+
+  const deleteTopic = async (topic: Topic) => {
+    if (!selectedSubject || !user) return;
+    if (!window.confirm('Are you sure you want to delete this topic and all its attachments?')) return;
+    
+    try {
+      // Delete attachments from storage first
+      if (topic.attachments && topic.attachments.length > 0) {
+        for (const att of topic.attachments) {
+          try {
+            const storageRef = ref(storage, att.url);
+            await deleteObject(storageRef);
+          } catch (e) {
+            console.error("Failed to delete attachment from storage:", att.name, e);
+          }
+        }
+      }
+      
+      // Delete from Firestore
+      await deleteDoc(doc(db, 'users', user.uid, 'subjects', selectedSubject.id, 'topics', topic.id));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `users/${user.uid}/subjects/${selectedSubject.id}/topics/${topic.id}`);
     }
   };
 
@@ -1333,6 +1378,13 @@ function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, u
                     value={newTopicName}
                     onChange={(e) => setNewTopicName(e.target.value)}
                   />
+
+                  <textarea 
+                    placeholder="Add notes or description..." 
+                    className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[100px] resize-none"
+                    value={newTopicNotes}
+                    onChange={(e) => setNewTopicNotes(e.target.value)}
+                  />
                   
                   <div className="flex items-center gap-4">
                     <span className="text-sm font-bold text-slate-400 uppercase">Priority:</span>
@@ -1465,6 +1517,13 @@ function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, u
                             </div>
                           </div>
 
+                          <textarea 
+                            placeholder="Edit notes..." 
+                            className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[80px] resize-none text-sm"
+                            value={editingTopicNotes}
+                            onChange={(e) => setEditingTopicNotes(e.target.value)}
+                          />
+
                           <div className="space-y-2">
                             <label className="text-xs font-bold text-slate-400 uppercase">Add More Attachments:</label>
                             <input 
@@ -1499,7 +1558,10 @@ function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, u
                                     <span className="truncate max-w-[150px]">{att.name}</span>
                                     <button 
                                       type="button"
-                                      onClick={() => setEditingTopicAttachments(prev => prev?.filter(a => a.url !== att.url))}
+                                      onClick={() => {
+                                        setAttachmentsToDelete(prev => [...prev, att.url]);
+                                        setEditingTopicAttachments(prev => prev?.filter(a => a.url !== att.url));
+                                      }}
                                       className="hover:text-red-500"
                                     >
                                       <X className="w-3 h-3" />
@@ -1548,6 +1610,9 @@ function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, u
                                 {topic.name}
                               </h4>
                               <span className="text-xs font-medium uppercase tracking-wider text-slate-400">{topic.status.replace('-', ' ')}</span>
+                              {topic.notes && (
+                                <p className="text-sm text-slate-500 mt-1 line-clamp-2">{topic.notes}</p>
+                              )}
                             </div>
                           </div>
                           
@@ -1570,11 +1635,7 @@ function SubjectsView({ subjects, topics, selectedSubject, setSelectedSubject, u
                               {topic.priority}
                             </button>
                             <button 
-                              onClick={() => {
-                                if (window.confirm('Delete this topic?')) {
-                                  deleteDoc(doc(db, 'users', user.uid, 'subjects', selectedSubject.id, 'topics', topic.id));
-                                }
-                              }}
+                              onClick={() => deleteTopic(topic)}
                               className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
                             >
                               <Trash2 className="w-4 h-4" />
