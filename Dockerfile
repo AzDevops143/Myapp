@@ -10,9 +10,12 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 # We add pkg-config and build-essential because sentencepiece 
 # sometimes needs to compile during installation
-RUN apt-get update && apt-get install -y pkg-config build-essential && \
-    pip install --no-cache-dir -r requirements.txt
-
+# 1. Install system dependencies required for sentencepiece and sacremoses
+# These must be installed BEFORE pip install
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 # Install Python requirements
 # We copy this first to cache the heavy downloads (like torch)
 COPY requirements.txt .
