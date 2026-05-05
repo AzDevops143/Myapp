@@ -1,4 +1,6 @@
 transformers
 torch
 wandb
+sentencepiece
+sacremoses
 huggingface_hub
