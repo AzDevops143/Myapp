@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
 
 # Install Python requirements
 # We copy this first to cache the heavy downloads (like torch)
-COPY requirements.txt .
+COPY ./requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy your source code
