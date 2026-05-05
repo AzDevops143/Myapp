@@ -1,56 +1,50 @@
-#code
 import os
 import wandb
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
-from huggingface_hub import HfApi, login
+from transformers import pipeline
 
-def run_demo():
-    # 1. Load Environment Variables passed from GitHub Actions
+def run_translation_demo():
+    # 1. Setup Environment & W&B
     wandb_api_key = os.getenv("WANDB_API_KEY")
-    wandb_project = os.getenv("WANDB_PROJECT", "wandb-demo")
-    hf_token = os.getenv("HF_TOKEN")
-    hf_repo_id = os.getenv("HF_REPO_ID")
-    upload_to_hf = os.getenv("UPLOAD_TO_HF", "false").lower() == "true"
-
-    print(f"--- Starting Demo for Repo: {hf_repo_id} ---")
-
-    # 2. Authenticate and Initialize W&B
+    model_id = "Helsinki-NLP/opus-mt-en-hi" # English to Hindi
+    
     if wandb_api_key:
         wandb.login(key=wandb_api_key)
-        wandb.init(project=wandb_project, name="github-action-run")
-        # Log a dummy metric to verify it works
-        wandb.log({"status": "success", "message": "BERT model initialized"})
-    else:
-        print("Warning: WANDB_API_KEY not found. Skipping W&B.")
+        wandb.init(project="wandb demo", name="translation-test")
 
-    # 3. Load a tiny BERT model (for speed in demo)
-    model_name = "google-bert/bert-base-uncased"
-    print(f"Loading model: {model_name}")
-    model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    # 2. Load the Translation Pipeline
+    print(f"Loading model: {model_id}...")
+    translator = pipeline("translation", model=model_id)
 
-    # 4. Save model locally
-    save_path = "./demo-model"
-    model.save_pretrained(save_path)
-    tokenizer.save_pretrained(save_path)
-    print("Model saved locally.")
+    # 3. Define sentences to translate
+    sentences = [
+        "Hello, this is a demo of English to Hindi translation.",
+        "Machine learning is very useful.",
+        "How are you doing today?"
+    ]
 
-    # 5. Upload to Hugging Face
-    if upload_to_hf and hf_token and hf_repo_id:
-        print(f"Uploading to Hugging Face: {hf_repo_id}")
-        try:
-            login(token=hf_token)
-            model.push_to_hub(hf_repo_id)
-            tokenizer.push_to_hub(hf_repo_id)
-            print("Successfully uploaded to Hugging Face!")
-        except Exception as e:
-            print(f"Error uploading to Hugging Face: {e}")
-    else:
-        print("Skipping Hugging Face upload (check your env variables).")
+    # 4. Perform Translation
+    results = translator(sentences)
 
-    # 6. Finish W&B
+    # 5. PRINT FORMATTED OUTPUT (To match your image)
+    print("\n" + "="*60)
+    print("✓ Translation completed successfully!")
+    print("="*60)
+    print(f"Model: {model_id}")
+    print("Inference Type: ACTUAL MODEL")
+    print(f"Total translations: {len(sentences)}")
+    print("\nTranslations:\n")
+
+    for i, (eng, res) in enumerate(zip(sentences, results)):
+        hindi_text = res['translation_text']
+        print(f"[{i+1}] English: {eng}")
+        print(f"    Hindi: {hindi_text}\n")
+        
+        # Optional: Log to W&B table
+        if wandb_api_key:
+            wandb.log({f"translation_{i}": f"EN: {eng} -> HI: {hindi_text}"})
+
     if wandb_api_key:
         wandb.finish()
 
 if __name__ == "__main__":
-    run_demo()
+    run_translation_demo()
