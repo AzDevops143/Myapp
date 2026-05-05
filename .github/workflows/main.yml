@@ -1,0 +1,38 @@
+name: demo
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch: # Allows you to run this manually from the Actions tab
+
+jobs:
+  bert-huggingface-wandb-demo:
+    runs-on: ubuntu-latest
+
+    env:
+      WANDB_PROJECT: "wandb demo"
+      HF_REPO_ID: "srajam696/hindi-en-demo-model"
+      UPLOAD_TO_HF: "true"
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Building the docker image
+        run: docker build -t bert-huggingface-wandb-demo .
+
+      - name: Run Inference
+        run: |
+          docker run --rm \
+            -e WANDB_API_KEY="${{ secrets.WANDB_API_KEY }}" \
+            -e WANDB_PROJECT="${{ env.WANDB_PROJECT }}" \
+            -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
+            -e HF_REPO_ID="${{ env.HF_REPO_ID }}" \
+            -e UPLOAD_TO_HF="${{ env.UPLOAD_TO_HF }}" \
+            bert-huggingface-wandb-demo
