@@ -1,0 +1,4 @@
+transformers
+torch
+wandb
+huggingface_hub
