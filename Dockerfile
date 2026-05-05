@@ -1,29 +1,21 @@
-# 1. Use a lightweight Python base image
+# Use a lightweight Python base
 FROM python:3.9-slim
 
-# 2. Set the working directory inside the container
+# Set the working directory
 WORKDIR /app
 
-# 3. Install system dependencies (needed for some NLP libraries)
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
-    curl \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
-# 4. Copy only requirements first to leverage Docker cache
-# This makes subsequent builds much faster
+# Install Python requirements
+# We copy this first to cache the heavy downloads (like torch)
 COPY requirements.txt .
-
-# 5. Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 6. Copy the rest of your application code
+# Copy your source code
 COPY . .
 
-# 7. Set default environment variables (can be overridden by GitHub Actions)
-ENV PYTHONUNBUFFERED=1
-
-# 8. Command to run your script
-# Replace 'main.py' with the actual name of your entry script
+# Run your script (ensure your script is named main.py)
 CMD ["python", "main.py"]
