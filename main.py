@@ -1,50 +1,68 @@
 import os
 import wandb
-from transformers import pipeline
+from transformers import pipeline, AutoModelForSeq2SeqLM, AutoTokenizer
 
 def run_translation_demo():
-    # 1. Setup Environment & W&B
+    # 1. Initialize Weights & Biases
     wandb_api_key = os.getenv("WANDB_API_KEY")
-    model_id = "Helsinki-NLP/opus-mt-en-hi" # English to Hindi
-    
+    project_name = "wandb demo"
+    run_name = "translation-test"
+    model_id = "Helsinki-NLP/opus-mt-en-hi"
+
     if wandb_api_key:
         wandb.login(key=wandb_api_key)
-        wandb.init(project="wandb demo", name="translation-test")
+        wandb.init(project=project_name, name=run_name)
+    else:
+        print("WANDB_API_KEY not found. Running in offline mode.")
+        wandb.init(mode="disabled")
 
-    # 2. Load the Translation Pipeline
+    # 2. Load Model and Tokenizer
     print(f"Loading model: {model_id}...")
-    translator = pipeline("translation", model=model_id)
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+    
+    # Create the translation pipeline
+    translator = pipeline("translation", model=model, tokenizer=tokenizer)
 
-    # 3. Define sentences to translate
+    # 3. Define Sentences for Translation
     sentences = [
         "Hello, this is a demo of English to Hindi translation.",
         "Machine learning is very useful.",
-        "How are you doing today?"
+        "How are you doing today?",
+        "Artificial Intelligence is changing the world.",
+        "Data science helps in making better decisions."
     ]
 
-    # 4. Perform Translation
-    results = translator(sentences)
+    # 4. Create a W&B Table to store results
+    # This is what turns "No visualizations yet" into a side-by-side comparison
+    columns = ["English Input", "Hindi Translation"]
+    results_table = wandb.Table(columns=columns)
 
-    # 5. PRINT FORMATTED OUTPUT (To match your image)
+    # 5. Perform Translation and Log to Table
     print("\n" + "="*60)
-    print("✓ Translation completed successfully!")
+    print("✓ Starting Translation Process")
     print("="*60)
-    print(f"Model: {model_id}")
-    print("Inference Type: ACTUAL MODEL")
-    print(f"Total translations: {len(sentences)}")
-    print("\nTranslations:\n")
 
-    for i, (eng, res) in enumerate(zip(sentences, results)):
-        hindi_text = res['translation_text']
-        print(f"[{i+1}] English: {eng}")
-        print(f"    Hindi: {hindi_text}\n")
+    for eng_text in sentences:
+        # Perform translation
+        output = translator(eng_text)
+        hindi_text = output[0]['translation_text']
         
-        # Optional: Log to W&B table
-        if wandb_api_key:
-            wandb.log({f"translation_{i}": f"EN: {eng} -> HI: {hindi_text}"})
+        # Add a row to our W&B Table
+        results_table.add_data(eng_text, hindi_text)
+        
+        # Print to terminal for GitHub Action logs
+        print(f"EN: {eng_text}")
+        print(f"HI: {hindi_text}\n")
 
-    if wandb_api_key:
-        wandb.finish()
+    # 6. Log the Table to W&B
+    wandb.log({"translation_results": results_table})
+    
+    # 7. Finalize W&B Run
+    print("="*60)
+    print("✓ Results successfully logged to W&B Table!")
+    print("="*60)
+    wandb.finish()
 
 if __name__ == "__main__":
     run_translation_demo()
