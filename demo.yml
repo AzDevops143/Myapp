@@ -31,7 +31,7 @@ jobs:
 
       - name: Run Inference
         run: |
-          docker run --rm \
+          docker run --rm -d\
             -e WANDB_API_KEY="${WANDB_API_KEY}" \
             -e WANDB_PROJECT="${WANDB_PROJECT}" \
             -e HF_TOKEN="${HF_TOKEN}" \
